@@ -101,9 +101,10 @@ const ICE_SERVERS = {
 
 ## 🔒 Variables de entorno
 
-| Variable | Default | Descripción |
-|----------|---------|-------------|
-| `PORT`   | `3000`  | Puerto del servidor |
+| Variable            | Default | Descripción |
+|---------------------|---------|-------------|
+| `PORT`              | `3000`  | Puerto del servidor |
+| `METERED_API_KEY`   | (ninguno) | API key de Metered.ca para TURN. Sin ella, solo se usan servidores STUN. |
 
 ---
 

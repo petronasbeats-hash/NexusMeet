@@ -13,10 +13,16 @@ const io = new Server(httpServer, {
 app.use(express.static(path.join(__dirname, '../public')));
 
 // --- TURN credentials (Metered.ca) ---
-const METERED_API_KEY = process.env.METERED_API_KEY || 'QVm58GV3HJYJu1elHRspqGFQq44GzHuUocRXyYZw8E4o-mZB';
+// La API key SIEMPRE debe venir de una variable de entorno (METERED_API_KEY).
+// No se deja ningun valor por defecto aqui porque el repo es publico.
+const METERED_API_KEY = process.env.METERED_API_KEY;
 const METERED_DOMAIN = 'rushnow.metered.live';
 
 app.get('/api/turn-credentials', async (req, res) => {
+  if (!METERED_API_KEY) {
+    console.warn('METERED_API_KEY no configurada: usando solo servidores STUN');
+    return res.json([]);
+  }
   try {
     const response = await fetch(
       `https://${METERED_DOMAIN}/api/v1/turn/credentials?apiKey=${METERED_API_KEY}`
