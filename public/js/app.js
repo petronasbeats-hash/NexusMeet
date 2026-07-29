@@ -36,6 +36,8 @@ let cameraVideoTrack = null; // referencia a la track de cámara para volver a e
 let audioMixContext = null;  // AudioContext para mezclar mic + audio del sistema
 let mixedAudioTrack = null;  // track resultante de la mezcla
 let micGainNode = null;      // controla el volumen del mic dentro de la mezcla
+let audioShareStream = null; // stream de getDisplayMedia usado solo para tomar su audio
+let isAudioOnlyShare = false; // true si se está compartiendo audio de pestaña sin mostrar su video
 let spatialAudioContext = null;
 let spatialEnabled = false;
 const peerAudioNodes = {};   // { socketId: { source, panner } }
@@ -332,6 +334,7 @@ async function toggleScreenShare() {
     stopScreenShare();
     return;
   }
+  if (isAudioOnlyShare) stopAudioOnlyShare(); // no mezclar los dos modos a la vez
 
   let stream;
   try {
@@ -374,6 +377,7 @@ async function toggleScreenShare() {
 // Mezcla el audio del sistema/pestaña compartida con el micrófono usando Web Audio API,
 // y envía esa mezcla en lugar del audio del micrófono solo.
 function setupAudioMix(screenAudioTrack) {
+  if (audioMixContext) return; // ya hay una mezcla activa (pantalla o audio de pestaña)
   audioMixContext = new AudioContext();
   const destination = audioMixContext.createMediaStreamDestination();
 
@@ -504,9 +508,81 @@ function disableSpatialAudio() {
   Object.keys(peerAudioNodes).forEach(id => delete peerAudioNodes[id]);
 }
 
+// ── Compartir solo audio de una pestaña (mantiene tu cámara visible) ─────
+// Igual que compartir pantalla, pide getDisplayMedia (el navegador exige
+// pedir video), pero detenemos esa track de video al instante: nunca se
+// muestra ni se envía, tu cámara sigue siendo lo que ven los demás.
+async function toggleAudioOnlyShare() {
+  if (isAudioOnlyShare) {
+    stopAudioOnlyShare();
+    return;
+  }
+  if (isScreenSharing) stopScreenShare(); // no mezclar los dos modos a la vez
+
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+  } catch (e) {
+    toast('No se pudo compartir el audio');
+    return;
+  }
+
+  const videoTrack = stream.getVideoTracks()[0];
+  const audioTrack = stream.getAudioTracks()[0];
+
+  if (!audioTrack) {
+    toast('Esa pestaña no tiene audio (marca "Compartir audio de la pestaña")');
+    if (videoTrack) videoTrack.stop();
+    return;
+  }
+
+  // Detenemos el video de inmediato: no se ve ni se envía a nadie
+  if (videoTrack) videoTrack.stop();
+
+  audioShareStream = stream;
+  isAudioOnlyShare = true;
+  setupAudioMix(audioTrack);
+
+  const btn = document.getElementById('audio-share-btn');
+  if (btn) btn.classList.add('active');
+  toast('Compartiendo audio de la pestaña');
+
+  audioTrack.onended = () => stopAudioOnlyShare();
+}
+
+function stopAudioOnlyShare() {
+  if (!isAudioOnlyShare) return;
+  isAudioOnlyShare = false;
+
+  if (audioShareStream) {
+    audioShareStream.getTracks().forEach(t => t.stop());
+    audioShareStream = null;
+  }
+
+  // Revertir la mezcla: volver a enviar solo el mic
+  if (audioMixContext) {
+    const micTrack = localStream ? localStream.getAudioTracks()[0] : null;
+    Object.values(peerConnections).forEach(pc => {
+      const sender = pc.getSenders().find(s => s.track && s.track.kind === 'audio');
+      if (sender && micTrack) sender.replaceTrack(micTrack);
+    });
+    audioMixContext.close();
+    audioMixContext = null;
+    mixedAudioTrack = null;
+    micGainNode = null;
+  }
+
+  const btn = document.getElementById('audio-share-btn');
+  if (btn) btn.classList.remove('active');
+  toast('Dejaste de compartir audio');
+}
+
 function hangUp() {
   // Apagar audio espacial si estaba activo
   if (spatialEnabled) { disableSpatialAudio(); spatialEnabled = false; }
+
+  // Detener compartir solo-audio si estaba activo
+  if (isAudioOnlyShare) stopAudioOnlyShare();
 
   // Detener compartir pantalla si estaba activo
   if (isScreenSharing) stopScreenShare();
