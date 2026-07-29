@@ -373,6 +373,12 @@ input::placeholder { color: var(--text-dim); }
 .ctrl-btn:active { transform: scale(0.95); }
 .ctrl-label { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
 .ctrl-btn.off { opacity: 0.4; }
+.ctrl-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.ctrl-btn.active .ctrl-label { color: #fff; }
 .ctrl-hang {
   background: var(--danger);
   border-color: var(--danger);

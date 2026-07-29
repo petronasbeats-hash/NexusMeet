@@ -30,6 +30,9 @@ let myNick = '';
 let myRoomId = '';
 let micOn = true;
 let camOn = true;
+let screenStream = null;
+let isScreenSharing = false;
+let cameraVideoTrack = null; // referencia a la track de cámara para volver a ella
 
 // peerConnections: { socketId: RTCPeerConnection }
 const peerConnections = {};
@@ -74,6 +77,7 @@ async function getMedia() {
       micOn = false;
     }
   }
+  cameraVideoTrack = localStream.getVideoTracks()[0] || null;
   return localStream;
 }
 
@@ -129,9 +133,15 @@ function createPeerConnection(socketId, nick) {
   peerConnections[socketId] = pc;
   peerNicks[socketId] = nick;
 
-  // Agregar tracks locales
+  // Agregar tracks locales (si ya se está compartiendo pantalla, se envía esa track de video)
   if (localStream) {
-    localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+    localStream.getTracks().forEach(track => {
+      if (track.kind === 'video' && isScreenSharing && screenStream) {
+        pc.addTrack(screenStream.getVideoTracks()[0], screenStream);
+      } else {
+        pc.addTrack(track, localStream);
+      }
+    });
   }
 
   // ICE candidates → servidor
@@ -300,7 +310,75 @@ function toggleCam() {
   btn.classList.toggle('off', !camOn);
 }
 
+// ── Compartir pantalla ───────────────────────────────────────────
+async function toggleScreenShare() {
+  if (isScreenSharing) {
+    stopScreenShare();
+    return;
+  }
+
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+  } catch (e) {
+    toast('No se pudo compartir pantalla');
+    return;
+  }
+
+  screenStream = stream;
+  isScreenSharing = true;
+  const screenTrack = screenStream.getVideoTracks()[0];
+
+  // Reemplazar la track de video en cada conexión activa
+  Object.values(peerConnections).forEach(pc => {
+    const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+    if (sender) sender.replaceTrack(screenTrack);
+  });
+
+  // Mostrar la pantalla en tu propio tile
+  const localVideo = document.querySelector('#tile-local video');
+  if (localVideo) localVideo.srcObject = screenStream;
+  const localTile = document.getElementById('tile-local');
+  if (localTile) localTile.classList.remove('cam-off');
+
+  const btn = document.getElementById('screen-btn');
+  if (btn) btn.classList.add('active');
+  toast('Compartiendo pantalla');
+
+  // Si el usuario detiene desde el propio control del navegador
+  screenTrack.onended = () => stopScreenShare();
+}
+
+function stopScreenShare() {
+  if (!isScreenSharing) return;
+
+  if (screenStream) {
+    screenStream.getTracks().forEach(t => t.stop());
+    screenStream = null;
+  }
+  isScreenSharing = false;
+
+  // Volver a enviar la cámara en cada conexión
+  Object.values(peerConnections).forEach(pc => {
+    const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+    if (sender && cameraVideoTrack) sender.replaceTrack(cameraVideoTrack);
+  });
+
+  // Restaurar tu tile local
+  const localVideo = document.querySelector('#tile-local video');
+  if (localVideo && localStream) localVideo.srcObject = localStream;
+  const localTile = document.getElementById('tile-local');
+  if (localTile) localTile.classList.toggle('cam-off', !camOn);
+
+  const btn = document.getElementById('screen-btn');
+  if (btn) btn.classList.remove('active');
+  toast('Dejaste de compartir pantalla');
+}
+
 function hangUp() {
+  // Detener compartir pantalla si estaba activo
+  if (isScreenSharing) stopScreenShare();
+
   // Cerrar todas las conexiones
   Object.values(peerConnections).forEach(pc => pc.close());
   Object.keys(peerConnections).forEach(k => delete peerConnections[k]);
