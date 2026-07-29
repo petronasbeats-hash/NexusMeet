@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voxlink — Videollamadas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div id="app">
+
+  <!-- LOBBY -->
+  <div id="lobby" class="screen active">
+    <div class="lobby-bg">
+      <div class="blob b1"></div>
+      <div class="blob b2"></div>
+      <div class="grid-overlay"></div>
+    </div>
+    <div class="lobby-content">
+      <div class="logo">
+        <span class="logo-icon">◈</span>
+        <span class="logo-text">Voxlink</span>
+      </div>
+      <p class="tagline">Videollamadas instantáneas.<br>Sin cuenta. Sin esperas.</p>
+
+      <div class="form-card">
+        <div class="input-group">
+          <label>Tu nickname</label>
+          <input id="nick-input" type="text" placeholder="Ej: Ana, Carlos, DJ_Cobra..." maxlength="20" autocomplete="off">
+        </div>
+
+        <button class="btn btn-primary" onclick="createRoom()">
+          <span class="btn-icon-left">+</span> Crear sala nueva
+        </button>
+
+        <div class="sep"><span>o</span></div>
+
+        <div class="input-group">
+          <label>Código de sala</label>
+          <input id="join-input" type="text" placeholder="ABC123" maxlength="8" autocomplete="off" style="text-transform:uppercase;letter-spacing:4px;font-size:18px">
+        </div>
+        <button class="btn btn-secondary" onclick="joinRoom()">Unirse →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SALA -->
+  <div id="room-screen" class="screen">
+    <header class="room-header">
+      <div class="room-brand">
+        <span class="logo-icon small">◈</span>
+        <span id="room-id-display" class="room-id">—</span>
+      </div>
+      <div class="room-meta">
+        <span id="peers-badge" class="badge">Solo tú</span>
+        <button class="btn-ghost" onclick="copyInvite()" id="copy-btn">Copiar enlace ↗</button>
+      </div>
+    </header>
+
+    <div id="videos-container">
+      <!-- Videos se insertan dinámicamente -->
+    </div>
+
+    <div id="status-bar">
+      <span id="status-text">Esperando participantes...</span>
+    </div>
+
+    <footer class="controls">
+      <button class="ctrl-btn" id="mic-btn" onclick="toggleMic()" title="Micrófono">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+          <line x1="12" y1="19" x2="12" y2="23"/>
+          <line x1="8" y1="23" x2="16" y2="23"/>
+        </svg>
+        <span class="ctrl-label">Mic</span>
+      </button>
+
+      <button class="ctrl-btn ctrl-hang" onclick="hangUp()" title="Colgar">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.41 2 2 0 0 1 3.6 1.21h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.81a16 16 0 0 0 6.29 6.29l.95-.95a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/>
+        </svg>
+        <span class="ctrl-label">Colgar</span>
+      </button>
+
+      <button class="ctrl-btn" id="cam-btn" onclick="toggleCam()" title="Cámara">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polygon points="23 7 16 12 23 17 23 7"/>
+          <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+        </svg>
+        <span class="ctrl-label">Cam</span>
+      </button>
+    </footer>
+  </div>
+
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
