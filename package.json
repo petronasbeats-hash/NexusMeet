@@ -1,7 +1,7 @@
 {
-  "name": "videocall-app",
+  "name": "nexus-meet",
   "version": "1.0.0",
-  "description": "Videollamadas sin registro con WebRTC + Socket.io",
+  "description": "Nexus Meet — Videollamadas sin registro con WebRTC + Socket.io",
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",

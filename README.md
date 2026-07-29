@@ -1,4 +1,4 @@
-# 🎥 Voxlink — Videollamadas sin registro
+# 🎥 Nexus Meet — Videollamadas sin registro
 
 App de videollamadas peer-to-peer usando WebRTC + Socket.io. Sin cuenta, sin registro, solo un nickname y un enlace.
 
@@ -30,7 +30,7 @@ npm run dev
 2. Entra a https://railway.app y crea cuenta
 3. "New Project" → "Deploy from GitHub repo"
 4. Selecciona tu repo → Deploy automático
-5. Railway te da una URL pública tipo: `https://voxlink-xxx.railway.app`
+5. Railway te da una URL pública tipo: `https://nexusmeet-xxx.railway.app`
 
 ---
 
