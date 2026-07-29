@@ -33,6 +33,9 @@ let camOn = true;
 let screenStream = null;
 let isScreenSharing = false;
 let cameraVideoTrack = null; // referencia a la track de cámara para volver a ella
+let audioMixContext = null;  // AudioContext para mezclar mic + audio del sistema
+let mixedAudioTrack = null;  // track resultante de la mezcla
+let micGainNode = null;      // controla el volumen del mic dentro de la mezcla
 
 // peerConnections: { socketId: RTCPeerConnection }
 const peerConnections = {};
@@ -133,11 +136,13 @@ function createPeerConnection(socketId, nick) {
   peerConnections[socketId] = pc;
   peerNicks[socketId] = nick;
 
-  // Agregar tracks locales (si ya se está compartiendo pantalla, se envía esa track de video)
+  // Agregar tracks locales (respeta pantalla/audio mezclado si ya están activos)
   if (localStream) {
     localStream.getTracks().forEach(track => {
       if (track.kind === 'video' && isScreenSharing && screenStream) {
         pc.addTrack(screenStream.getVideoTracks()[0], screenStream);
+      } else if (track.kind === 'audio' && mixedAudioTrack) {
+        pc.addTrack(mixedAudioTrack, screenStream || localStream);
       } else {
         pc.addTrack(track, localStream);
       }
@@ -296,6 +301,7 @@ function copyInvite() {
 function toggleMic() {
   micOn = !micOn;
   if (localStream) localStream.getAudioTracks().forEach(t => t.enabled = micOn);
+  if (micGainNode) micGainNode.gain.value = micOn ? 1 : 0;
   const btn = document.getElementById('mic-btn');
   btn.classList.toggle('off', !micOn);
   btn.title = micOn ? 'Silenciar' : 'Activar micrófono';
@@ -319,7 +325,7 @@ async function toggleScreenShare() {
 
   let stream;
   try {
-    stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
   } catch (e) {
     toast('No se pudo compartir pantalla');
     return;
@@ -328,12 +334,18 @@ async function toggleScreenShare() {
   screenStream = stream;
   isScreenSharing = true;
   const screenTrack = screenStream.getVideoTracks()[0];
+  const screenAudioTrack = screenStream.getAudioTracks()[0] || null;
 
   // Reemplazar la track de video en cada conexión activa
   Object.values(peerConnections).forEach(pc => {
     const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
     if (sender) sender.replaceTrack(screenTrack);
   });
+
+  // Si el navegador capturó audio del sistema/pestaña, mezclarlo con tu micrófono
+  if (screenAudioTrack) {
+    setupAudioMix(screenAudioTrack);
+  }
 
   // Mostrar la pantalla en tu propio tile
   const localVideo = document.querySelector('#tile-local video');
@@ -343,10 +355,38 @@ async function toggleScreenShare() {
 
   const btn = document.getElementById('screen-btn');
   if (btn) btn.classList.add('active');
-  toast('Compartiendo pantalla');
+  toast(screenAudioTrack ? 'Compartiendo pantalla con audio' : 'Compartiendo pantalla');
 
   // Si el usuario detiene desde el propio control del navegador
   screenTrack.onended = () => stopScreenShare();
+}
+
+// Mezcla el audio del sistema/pestaña compartida con el micrófono usando Web Audio API,
+// y envía esa mezcla en lugar del audio del micrófono solo.
+function setupAudioMix(screenAudioTrack) {
+  audioMixContext = new AudioContext();
+  const destination = audioMixContext.createMediaStreamDestination();
+
+  // Fuente 1: audio del sistema/pestaña que estás compartiendo
+  const screenSource = audioMixContext.createMediaStreamSource(new MediaStream([screenAudioTrack]));
+  screenSource.connect(destination);
+
+  // Fuente 2: tu micrófono (respeta si está silenciado)
+  const micTrack = localStream ? localStream.getAudioTracks()[0] : null;
+  if (micTrack) {
+    const micSource = audioMixContext.createMediaStreamSource(new MediaStream([micTrack]));
+    micGainNode = audioMixContext.createGain();
+    micGainNode.gain.value = micOn ? 1 : 0;
+    micSource.connect(micGainNode).connect(destination);
+  }
+
+  mixedAudioTrack = destination.stream.getAudioTracks()[0];
+
+  // Enviar la mezcla en cada conexión activa
+  Object.values(peerConnections).forEach(pc => {
+    const sender = pc.getSenders().find(s => s.track && s.track.kind === 'audio');
+    if (sender) sender.replaceTrack(mixedAudioTrack);
+  });
 }
 
 function stopScreenShare() {
@@ -357,6 +397,19 @@ function stopScreenShare() {
     screenStream = null;
   }
   isScreenSharing = false;
+
+  // Revertir la mezcla de audio si estaba activa: volver a enviar solo el mic
+  if (audioMixContext) {
+    const micTrack = localStream ? localStream.getAudioTracks()[0] : null;
+    Object.values(peerConnections).forEach(pc => {
+      const sender = pc.getSenders().find(s => s.track && s.track.kind === 'audio');
+      if (sender && micTrack) sender.replaceTrack(micTrack);
+    });
+    audioMixContext.close();
+    audioMixContext = null;
+    mixedAudioTrack = null;
+    micGainNode = null;
+  }
 
   // Volver a enviar la cámara en cada conexión
   Object.values(peerConnections).forEach(pc => {
