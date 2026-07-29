@@ -36,6 +36,9 @@ let cameraVideoTrack = null; // referencia a la track de cámara para volver a e
 let audioMixContext = null;  // AudioContext para mezclar mic + audio del sistema
 let mixedAudioTrack = null;  // track resultante de la mezcla
 let micGainNode = null;      // controla el volumen del mic dentro de la mezcla
+let spatialAudioContext = null;
+let spatialEnabled = false;
+const peerAudioNodes = {};   // { socketId: { source, panner } }
 
 // peerConnections: { socketId: RTCPeerConnection }
 const peerConnections = {};
@@ -161,6 +164,7 @@ function createPeerConnection(socketId, nick) {
     const remoteStream = streams[0];
     const tileId = `tile-${socketId}`;
     addVideoTile(remoteStream, nick, tileId);
+    if (spatialEnabled) setupSpatialForPeer(socketId, remoteStream);
     setStatus(`En llamada con: ${Object.values(peerNicks).join(', ')}`);
   };
 
@@ -178,6 +182,12 @@ function cleanupPeer(socketId) {
   if (peerConnections[socketId]) {
     peerConnections[socketId].close();
     delete peerConnections[socketId];
+  }
+  if (peerAudioNodes[socketId]) {
+    peerAudioNodes[socketId].source.disconnect();
+    peerAudioNodes[socketId].panner.disconnect();
+    delete peerAudioNodes[socketId];
+    updateSpatialPanning();
   }
   const nick = peerNicks[socketId] || 'Alguien';
   delete peerNicks[socketId];
@@ -428,7 +438,76 @@ function stopScreenShare() {
   toast('Dejaste de compartir pantalla');
 }
 
+// ── Audio espacial ────────────────────────────────────────────────
+// Cada participante suena más a la izquierda o derecha según su
+// posición en la cuadrícula, usando un StereoPannerNode por peer.
+function toggleSpatialAudio() {
+  spatialEnabled = !spatialEnabled;
+  const btn = document.getElementById('spatial-btn');
+
+  if (spatialEnabled) {
+    spatialAudioContext = spatialAudioContext || new AudioContext();
+    if (spatialAudioContext.state === 'suspended') spatialAudioContext.resume();
+
+    // Enganchar el audio de los peers ya conectados
+    Object.keys(peerConnections).forEach(socketId => {
+      const tile = document.getElementById(`tile-${socketId}`);
+      const video = tile && tile.querySelector('video');
+      if (video && video.srcObject) setupSpatialForPeer(socketId, video.srcObject);
+    });
+
+    if (btn) btn.classList.add('active');
+    toast('Audio espacial activado');
+  } else {
+    disableSpatialAudio();
+    if (btn) btn.classList.remove('active');
+    toast('Audio espacial desactivado');
+  }
+}
+
+function setupSpatialForPeer(socketId, stream) {
+  if (!spatialAudioContext || peerAudioNodes[socketId]) return;
+  const audioTrack = stream.getAudioTracks()[0];
+  if (!audioTrack) return;
+
+  // Mutear el <video> para no duplicar el audio (se reproduce vía Web Audio)
+  const tile = document.getElementById(`tile-${socketId}`);
+  const video = tile && tile.querySelector('video');
+  if (video) video.muted = true;
+
+  const source = spatialAudioContext.createMediaStreamSource(new MediaStream([audioTrack]));
+  const panner = spatialAudioContext.createStereoPanner();
+  source.connect(panner).connect(spatialAudioContext.destination);
+
+  peerAudioNodes[socketId] = { source, panner };
+  updateSpatialPanning();
+}
+
+function updateSpatialPanning() {
+  const ids = Object.keys(peerAudioNodes);
+  const n = ids.length;
+  ids.forEach((id, i) => {
+    // Distribuye los paneos de -0.8 (izquierda) a 0.8 (derecha)
+    const pan = n === 1 ? 0 : -0.8 + (1.6 * i) / (n - 1);
+    peerAudioNodes[id].panner.pan.value = pan;
+  });
+}
+
+function disableSpatialAudio() {
+  Object.entries(peerAudioNodes).forEach(([socketId, nodes]) => {
+    nodes.source.disconnect();
+    nodes.panner.disconnect();
+    const tile = document.getElementById(`tile-${socketId}`);
+    const video = tile && tile.querySelector('video');
+    if (video) video.muted = false; // volver al audio normal del <video>
+  });
+  Object.keys(peerAudioNodes).forEach(id => delete peerAudioNodes[id]);
+}
+
 function hangUp() {
+  // Apagar audio espacial si estaba activo
+  if (spatialEnabled) { disableSpatialAudio(); spatialEnabled = false; }
+
   // Detener compartir pantalla si estaba activo
   if (isScreenSharing) stopScreenShare();
 
@@ -446,6 +525,8 @@ function hangUp() {
   micOn = true; camOn = true;
   document.getElementById('mic-btn').classList.remove('off');
   document.getElementById('cam-btn').classList.remove('off');
+  const spatialBtn = document.getElementById('spatial-btn');
+  if (spatialBtn) spatialBtn.classList.remove('active');
   document.getElementById('nick-input').value = '';
   document.getElementById('join-input').value = '';
 
