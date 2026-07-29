@@ -77,6 +77,11 @@ io.on('connection', (socket) => {
   });
 
   // Usuario se desconecta
+  socket.on('chat-message', ({ roomId, nick, message }) => {
+    if (!roomId || !message) return;
+    io.to(roomId).emit('chat-message', { nick, message, ts: Date.now() });
+  });
+
   socket.on('disconnect', () => {
     const { roomId, nick } = socket;
     if (roomId && rooms[roomId]) {

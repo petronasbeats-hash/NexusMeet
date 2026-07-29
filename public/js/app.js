@@ -184,6 +184,10 @@ function connectSocket(roomId, nick) {
     socket.emit('join-room', { roomId, nick });
   });
 
+  socket.on('chat-message', ({ nick: fromNick, message, ts }) => {
+    addChatMessage(fromNick, message, fromNick === myNick);
+  });
+
   // Lista de peers ya en la sala → iniciar offer a cada uno
   socket.on('room-peers', async (peers) => {
     for (const peer of peers) {
@@ -323,4 +327,54 @@ const roomFromUrl = params.get('room');
 if (roomFromUrl) {
   document.getElementById('join-input').value = roomFromUrl.toUpperCase();
   document.getElementById('join-input').focus();
+}
+
+
+function addChatMessage(nick, message, isMine) {
+  const list = document.getElementById('chat-messages');
+  if (!list) return;
+  const div = document.createElement('div');
+  div.className = 'chat-msg' + (isMine ? ' mine' : '');
+  div.innerHTML = `<span class="chat-nick">${nick}:</span> <span class="chat-text"></span>`;
+  div.querySelector('.chat-text').textContent = message;
+  list.appendChild(div);
+  list.scrollTop = list.scrollHeight;
+}
+
+function sendChatMessage() {
+  const input = document.getElementById('chat-input');
+  const message = input.value.trim();
+  if (!message || !socket) return;
+  socket.emit('chat-message', { roomId: myRoomId, nick: myNick, message });
+  input.value = '';
+}
+
+function toggleChat() {
+  const panel = document.getElementById('chat-panel');
+  if (panel) panel.classList.toggle('open');
+}
+
+
+function addChatMessage(nick, message, isMine) {
+  const list = document.getElementById('chat-messages');
+  if (!list) return;
+  const div = document.createElement('div');
+  div.className = 'chat-msg' + (isMine ? ' mine' : '');
+  div.innerHTML = `<span class="chat-nick">${nick}:</span> <span class="chat-text"></span>`;
+  div.querySelector('.chat-text').textContent = message;
+  list.appendChild(div);
+  list.scrollTop = list.scrollHeight;
+}
+
+function sendChatMessage() {
+  const input = document.getElementById('chat-input');
+  const message = input.value.trim();
+  if (!message || !socket) return;
+  socket.emit('chat-message', { roomId: myRoomId, nick: myNick, message });
+  input.value = '';
+}
+
+function toggleChat() {
+  const panel = document.getElementById('chat-panel');
+  if (panel) panel.classList.toggle('open');
 }

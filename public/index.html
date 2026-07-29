@@ -68,7 +68,19 @@
       <span id="status-text">Esperando participantes...</span>
     </div>
 
+    <div id="chat-panel" class="chat-panel">
+      <div id="chat-messages" class="chat-messages"></div>
+      <div class="chat-input-row">
+        <input type="text" id="chat-input" placeholder="Escribe un mensaje..." onkeydown="if(event.key==='Enter') sendChatMessage()">
+        <button onclick="sendChatMessage()">Enviar</button>
+      </div>
+    </div>
+
     <footer class="controls">
+
+      <button class="ctrl-btn" id="chat-btn" onclick="toggleChat()" title="Chat">
+        <span class="ctrl-label">Chat</span>
+      </button>
       <button class="ctrl-btn" id="mic-btn" onclick="toggleMic()" title="Micrófono">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
