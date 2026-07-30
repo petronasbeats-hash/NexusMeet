@@ -725,7 +725,8 @@ input::placeholder { color: var(--text-dim); }
   font-size: 16px;
   line-height: 1;
 }
-#videos-container.host-mode .video-tile:not(#tile-local) .tile-mod-btn { display: block; }
+#videos-container.host-mode .video-tile:not(#tile-local) .tile-mod-btn,
+#videos-container.mod-mode .video-tile:not(#tile-local) .tile-mod-btn { display: block; }
 .tile-mod-menu {
   display: none;
   position: absolute;
@@ -808,4 +809,18 @@ input::placeholder { color: var(--text-dim); }
 #videos-container.pinned-view .video-tile.pinned-tile {
   display: block;
   flex: 1;
+}
+
+/* ── Badge de rol: host / co-host ─────────────────────────────── */
+.tile-role-badge {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.6);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 14px;
+  z-index: 2;
+  pointer-events: none;
 }

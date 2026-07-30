@@ -53,6 +53,23 @@ function generateInviteToken() {
 
 const DEFAULT_RULES = 'Sé respetuoso con los demás participantes. No compartas contenido inapropiado. El host puede expulsar a quien no cumpla estas reglas.';
 
+// ¿Puede este socket moderar (host o co-host)?
+function canModerate(room, socketId) {
+  return room.host === socketId || room.coHosts.has(socketId);
+}
+
+// ¿Puede actorId aplicar una acción de moderación sobre targetId?
+// (un co-host no puede moderar al host)
+function canModerateTarget(room, actorId, targetId) {
+  if (!canModerate(room, actorId)) return false;
+  if (targetId === room.host && actorId !== room.host) return false;
+  return true;
+}
+
+function broadcastRoles(io, roomId, room) {
+  io.to(roomId).emit('room-roles', { host: room.host, coHosts: Array.from(room.coHosts) });
+}
+
 function admitToRoom(io, rooms, sock, roomId, nick) {
   sock.join(roomId);
   const room = rooms[roomId];
@@ -62,6 +79,8 @@ function admitToRoom(io, rooms, sock, roomId, nick) {
 
   sock.emit('room-peers', peers);
   sock.emit('you-are-host', room.host === sock.id);
+  sock.emit('you-are-cohost', room.coHosts.has(sock.id));
+  sock.emit('room-roles', { host: room.host, coHosts: Array.from(room.coHosts) });
   sock.emit('invite-info', { token: room.inviteToken, expiresAt: room.inviteExpires });
   sock.emit('room-lock-changed', room.locked);
   sock.to(roomId).emit('peer-joined', { nick, socketId: sock.id });
@@ -90,6 +109,7 @@ io.on('connection', (socket) => {
         hostToken, // identifica al creador original, para que pueda reclamar el rol si vuelve
         rules: DEFAULT_RULES,
         bannedNicks: new Set(),
+        coHosts: new Set(),
       };
       admitToRoom(io, rooms, socket, roomId, nick);
       socket.emit('host-token', hostToken);
@@ -204,7 +224,7 @@ io.on('connection', (socket) => {
   // El host manda de vuelta a la sala de espera a alguien que ya estaba dentro
   socket.on('demote-peer', ({ socketId }) => {
     const room = rooms[socket.roomId];
-    if (!room || room.host !== socket.id || socketId === socket.id) return;
+    if (!room || !canModerateTarget(room, socket.id, socketId) || socketId === socket.id) return;
     const peer = room.peers[socketId];
     if (!peer) return;
     delete room.peers[socketId];
@@ -222,7 +242,7 @@ io.on('connection', (socket) => {
   // El host expulsa a alguien: no puede volver a entrar con el mismo nick
   socket.on('expel-peer', ({ socketId }) => {
     const room = rooms[socket.roomId];
-    if (!room || room.host !== socket.id || socketId === socket.id) return;
+    if (!room || !canModerateTarget(room, socket.id, socketId) || socketId === socket.id) return;
     const peer = room.peers[socketId] || room.waiting[socketId];
     if (!peer) return;
     delete room.peers[socketId];
@@ -237,7 +257,7 @@ io.on('connection', (socket) => {
   // El host aprueba a alguien de la sala de espera
   socket.on('admit-peer', ({ socketId }) => {
     const room = rooms[socket.roomId];
-    if (!room || room.host !== socket.id) return; // solo el host puede admitir
+    if (!room || !canModerate(room, socket.id)) return; // host o co-host puede admitir
     const waiter = room.waiting[socketId];
     if (!waiter) return;
     delete room.waiting[socketId];
@@ -249,7 +269,7 @@ io.on('connection', (socket) => {
   // El host rechaza a alguien de la sala de espera
   socket.on('reject-peer', ({ socketId }) => {
     const room = rooms[socket.roomId];
-    if (!room || room.host !== socket.id) return;
+    if (!room || !canModerate(room, socket.id)) return;
     delete room.waiting[socketId];
     io.to(socketId).emit('join-rejected');
   });
@@ -282,18 +302,62 @@ io.on('connection', (socket) => {
     socket.to(socket.roomId).emit('peer-state', { socketId: socket.id, micOn, camOn });
   });
 
-  // El host fuerza (enciende/apaga) el mic de un participante
+  // El host o co-host fuerza (enciende/apaga) el mic de un participante
   socket.on('host-force-mic', ({ socketId, micOn }) => {
     const room = rooms[socket.roomId];
-    if (!room || room.host !== socket.id || !room.peers[socketId]) return;
+    if (!room || !canModerateTarget(room, socket.id, socketId) || !room.peers[socketId]) return;
     io.to(socketId).emit('forced-mic', { micOn: !!micOn });
   });
 
-  // El host fuerza (enciende/apaga) la cámara de un participante
+  // El host o co-host fuerza (enciende/apaga) la cámara de un participante
   socket.on('host-force-cam', ({ socketId, camOn }) => {
     const room = rooms[socket.roomId];
-    if (!room || room.host !== socket.id || !room.peers[socketId]) return;
+    if (!room || !canModerateTarget(room, socket.id, socketId) || !room.peers[socketId]) return;
     io.to(socketId).emit('forced-cam', { camOn: !!camOn });
+  });
+
+  // El host cede su rol a otro participante de la sala
+  socket.on('transfer-host', ({ socketId }) => {
+    const room = rooms[socket.roomId];
+    if (!room || room.host !== socket.id || socketId === socket.id || !room.peers[socketId]) return;
+    const oldHostId = socket.id;
+    room.host = socketId;
+    room.coHosts.delete(socketId);
+    // Se revoca la posibilidad de que el creador original reclame el rol de vuelta
+    room.hostToken = generateInviteToken();
+
+    io.to(oldHostId).emit('you-are-host', false);
+    const newHostSocket = io.sockets.sockets.get(socketId);
+    if (newHostSocket) {
+      newHostSocket.emit('you-are-host', true);
+      newHostSocket.emit('you-are-cohost', false);
+      newHostSocket.emit('host-token', room.hostToken);
+    }
+    broadcastRoles(io, socket.roomId, room);
+    const newHostPeer = room.peers[socketId];
+    io.to(socket.roomId).emit('host-changed', { nick: newHostPeer ? newHostPeer.nick : '' });
+  });
+
+  // El host asigna a alguien como co-host
+  socket.on('assign-cohost', ({ socketId }) => {
+    const room = rooms[socket.roomId];
+    if (!room || room.host !== socket.id || socketId === socket.id || !room.peers[socketId]) return;
+    room.coHosts.add(socketId);
+    io.to(socketId).emit('you-are-cohost', true);
+    broadcastRoles(io, socket.roomId, room);
+    const peer = room.peers[socketId];
+    io.to(socket.roomId).emit('cohost-changed', { nick: peer ? peer.nick : '', assigned: true });
+  });
+
+  // El host revoca el rol de co-host
+  socket.on('revoke-cohost', ({ socketId }) => {
+    const room = rooms[socket.roomId];
+    if (!room || room.host !== socket.id) return;
+    room.coHosts.delete(socketId);
+    io.to(socketId).emit('you-are-cohost', false);
+    broadcastRoles(io, socket.roomId, room);
+    const peer = room.peers[socketId];
+    io.to(socket.roomId).emit('cohost-changed', { nick: peer ? peer.nick : 'Alguien', assigned: false });
   });
 
   socket.on('disconnect', () => {
@@ -302,6 +366,7 @@ io.on('connection', (socket) => {
     if (room) {
       delete room.peers[socket.id];
       delete room.waiting[socket.id];
+      room.coHosts.delete(socket.id);
 
       if (Object.keys(room.peers).length === 0 && Object.keys(room.waiting).length === 0) {
         delete rooms[roomId];
@@ -311,7 +376,9 @@ io.on('connection', (socket) => {
           const nextHostId = Object.keys(room.peers)[0];
           if (nextHostId) {
             room.host = nextHostId;
+            room.coHosts.delete(nextHostId);
             io.to(nextHostId).emit('you-are-host', true);
+            io.to(nextHostId).emit('you-are-cohost', false);
             // Reenviar al nuevo host las solicitudes de espera pendientes
             Object.values(room.waiting).forEach(w => {
               io.to(nextHostId).emit('join-request', { nick: w.nick, socketId: w.socketId });
@@ -324,10 +391,14 @@ io.on('connection', (socket) => {
               const promoted = room.waiting[promotedId];
               delete room.waiting[promotedId];
               room.host = promotedId;
+              room.coHosts.delete(promotedId);
               const promotedSocket = io.sockets.sockets.get(promotedId);
               if (promotedSocket) admitToRoom(io, rooms, promotedSocket, roomId, promoted.nick);
             }
           }
+          broadcastRoles(io, roomId, room);
+        } else {
+          broadcastRoles(io, roomId, room);
         }
         socket.to(roomId).emit('peer-left', { socketId: socket.id, nick });
       }

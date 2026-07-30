@@ -48,6 +48,10 @@ const peerAudioNodes = {};   // { socketId: { source, panner } }
 let pinnedTileId = null;     // id del tile anclado en pantalla grande, null = vista de galería
 const peerMicState = {};     // { socketId: bool } último estado de mic conocido de cada peer
 const peerCamState = {};     // { socketId: bool } último estado de cámara conocido de cada peer
+let mySocketId = null;
+let isCoHost = false;
+let currentHostId = null;
+let coHostIds = new Set();
 
 // peerConnections: { socketId: RTCPeerConnection }
 const peerConnections = {};
@@ -119,12 +123,7 @@ function addVideoTile(stream, nick, tileId, muted = false) {
       <button class="tile-fullscreen-btn" onclick="toggleTileFullscreen('${tileId}')" title="Pantalla completa">⛶</button>
       ${isRemote ? `
         <button class="tile-mod-btn" onclick="toggleTileMenu('${tileId}')">⋮</button>
-        <div class="tile-mod-menu" id="mod-menu-${tileId}">
-          <button id="mod-mic-${socketId}" onclick="hostToggleMic('${socketId}')">Silenciar su micrófono</button>
-          <button id="mod-cam-${socketId}" onclick="hostToggleCam('${socketId}')">Apagar su cámara</button>
-          <button onclick="demotePeer('${socketId}')">Enviar a sala de espera</button>
-          <button class="tm-expel" onclick="expelPeer('${socketId}')">Expulsar de la sala</button>
-        </div>
+        <div class="tile-mod-menu" id="mod-menu-${tileId}">${buildModMenuHtml(socketId)}</div>
       ` : ''}
     `;
     container.appendChild(tile);
@@ -137,6 +136,7 @@ function addVideoTile(stream, nick, tileId, muted = false) {
     tile.classList.add('cam-off');
   }
 
+  updateRoleBadges();
   updateGridLayout();
   return tile;
 }
@@ -214,16 +214,92 @@ function updatePeerIndicators(socketId, pMic, pCam) {
 }
 
 function hostToggleMic(socketId) {
-  if (!socket || !isHost) return;
+  if (!socket || (!isHost && !isCoHost)) return;
   const newMicOn = peerMicState[socketId] === false;
   socket.emit('host-force-mic', { socketId, micOn: newMicOn });
   document.querySelectorAll('.tile-mod-menu.show').forEach(m => m.classList.remove('show'));
 }
 
 function hostToggleCam(socketId) {
-  if (!socket || !isHost) return;
+  if (!socket || (!isHost && !isCoHost)) return;
   const newCamOn = peerCamState[socketId] === false;
   socket.emit('host-force-cam', { socketId, camOn: newCamOn });
+  document.querySelectorAll('.tile-mod-menu.show').forEach(m => m.classList.remove('show'));
+}
+
+// ── Roles: host / co-host ──────────────────────────────────────────
+function buildModMenuHtml(socketId) {
+  const micLabel = peerMicState[socketId] === false ? 'Activar su micrófono' : 'Silenciar su micrófono';
+  const camLabel = peerCamState[socketId] === false ? 'Encender su cámara' : 'Apagar su cámara';
+  const isThatHost = socketId === currentHostId;
+  const isThatCoHost = coHostIds.has(socketId);
+  const canMod = isHost || isCoHost;
+
+  let html = '';
+  if (canMod) {
+    html += `<button id="mod-mic-${socketId}" onclick="hostToggleMic('${socketId}')">${micLabel}</button>`;
+    html += `<button id="mod-cam-${socketId}" onclick="hostToggleCam('${socketId}')">${camLabel}</button>`;
+  }
+  if (isHost && !isThatHost) {
+    html += `<button onclick="transferHost('${socketId}')">Ceder host a esta persona</button>`;
+    html += isThatCoHost
+      ? `<button onclick="revokeCoHost('${socketId}')">Quitar co-host</button>`
+      : `<button onclick="assignCoHost('${socketId}')">Hacer co-host</button>`;
+  }
+  if (canMod && !isThatHost) {
+    html += `<button onclick="demotePeer('${socketId}')">Enviar a sala de espera</button>`;
+    html += `<button class="tm-expel" onclick="expelPeer('${socketId}')">Expulsar de la sala</button>`;
+  }
+  return html;
+}
+
+function rebuildAllTileMenus() {
+  document.querySelectorAll('.video-tile').forEach(tile => {
+    if (tile.id === 'tile-local') return;
+    const socketId = tile.id.slice(5);
+    const menu = document.getElementById(`mod-menu-${tile.id}`);
+    if (menu) menu.innerHTML = buildModMenuHtml(socketId);
+  });
+}
+
+function updateRoleBadges() {
+  document.querySelectorAll('.video-tile').forEach(tile => {
+    const id = tile.id === 'tile-local' ? mySocketId : tile.id.slice(5);
+    let badge = tile.querySelector('.tile-role-badge');
+    let icon = '';
+    if (id && currentHostId && id === currentHostId) icon = '👑';
+    else if (id && coHostIds.has(id)) icon = '⭐';
+
+    if (icon) {
+      if (!badge) {
+        badge = document.createElement('div');
+        badge.className = 'tile-role-badge';
+        tile.appendChild(badge);
+      }
+      badge.textContent = icon;
+      badge.title = icon === '👑' ? 'Host' : 'Co-host';
+    } else if (badge) {
+      badge.remove();
+    }
+  });
+}
+
+function transferHost(socketId) {
+  if (!socket || !isHost) return;
+  if (!confirm('¿Ceder el rol de host a esta persona? Perderás tus privilegios de host.')) return;
+  socket.emit('transfer-host', { socketId });
+  document.querySelectorAll('.tile-mod-menu.show').forEach(m => m.classList.remove('show'));
+}
+
+function assignCoHost(socketId) {
+  if (!socket || !isHost) return;
+  socket.emit('assign-cohost', { socketId });
+  document.querySelectorAll('.tile-mod-menu.show').forEach(m => m.classList.remove('show'));
+}
+
+function revokeCoHost(socketId) {
+  if (!socket || !isHost) return;
+  socket.emit('revoke-cohost', { socketId });
   document.querySelectorAll('.tile-mod-menu.show').forEach(m => m.classList.remove('show'));
 }
 
@@ -300,6 +376,7 @@ function connectSocket(roomId, nick, invite) {
   socket = io();
 
   socket.on('connect', () => {
+    mySocketId = socket.id;
     const hostToken = sessionStorage.getItem(`nm-host-${roomId}`);
     socket.emit('join-room', { roomId, nick, invite, hostToken });
   });
@@ -355,6 +432,33 @@ function connectSocket(roomId, nick, invite) {
   socket.on('you-are-host', (value) => {
     isHost = value;
     updateLockButton();
+    rebuildAllTileMenus();
+    updateRoleBadges();
+  });
+
+  socket.on('you-are-cohost', (value) => {
+    isCoHost = value;
+    toast(value ? 'Ahora eres co-host' : 'Ya no eres co-host');
+    updateLockButton();
+    rebuildAllTileMenus();
+    updateRoleBadges();
+  });
+
+  socket.on('room-roles', ({ host, coHosts }) => {
+    currentHostId = host;
+    coHostIds = new Set(coHosts || []);
+    isCoHost = coHostIds.has(mySocketId);
+    updateLockButton();
+    rebuildAllTileMenus();
+    updateRoleBadges();
+  });
+
+  socket.on('host-changed', ({ nick: newHostNick }) => {
+    if (newHostNick) toast(`${newHostNick} es ahora el host`);
+  });
+
+  socket.on('cohost-changed', ({ nick: pNick, assigned }) => {
+    toast(assigned ? `${pNick} ahora es co-host` : `${pNick} ya no es co-host`);
   });
 
   socket.on('join-request', ({ nick: pNick, socketId }) => {
@@ -966,12 +1070,18 @@ function updateLockButton() {
   if (rulesBtn) rulesBtn.style.display = isHost ? 'inline-block' : 'none';
 
   const videosContainer = document.getElementById('videos-container');
-  if (videosContainer) videosContainer.classList.toggle('host-mode', isHost);
+  if (videosContainer) {
+    videosContainer.classList.toggle('host-mode', isHost);
+    videosContainer.classList.toggle('mod-mode', isHost || isCoHost);
+  }
 }
 
 function hangUp() {
   isHost = false;
   isRoomLocked = false;
+  isCoHost = false;
+  currentHostId = null;
+  coHostIds = new Set();
   pinnedTileId = null;
   Object.keys(peerMicState).forEach(k => delete peerMicState[k]);
   Object.keys(peerCamState).forEach(k => delete peerCamState[k]);
