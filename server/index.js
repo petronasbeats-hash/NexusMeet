@@ -275,6 +275,27 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('chat-message', { nick, message, ts: Date.now() });
   });
 
+  // Cualquier peer informa su estado de mic/cámara para que los demás vean el ícono
+  socket.on('peer-state', ({ micOn, camOn }) => {
+    const room = rooms[socket.roomId];
+    if (!room) return;
+    socket.to(socket.roomId).emit('peer-state', { socketId: socket.id, micOn, camOn });
+  });
+
+  // El host fuerza (enciende/apaga) el mic de un participante
+  socket.on('host-force-mic', ({ socketId, micOn }) => {
+    const room = rooms[socket.roomId];
+    if (!room || room.host !== socket.id || !room.peers[socketId]) return;
+    io.to(socketId).emit('forced-mic', { micOn: !!micOn });
+  });
+
+  // El host fuerza (enciende/apaga) la cámara de un participante
+  socket.on('host-force-cam', ({ socketId, camOn }) => {
+    const room = rooms[socket.roomId];
+    if (!room || room.host !== socket.id || !room.peers[socketId]) return;
+    io.to(socketId).emit('forced-cam', { camOn: !!camOn });
+  });
+
   socket.on('disconnect', () => {
     const { roomId, nick } = socket;
     const room = rooms[roomId];

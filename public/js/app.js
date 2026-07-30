@@ -45,6 +45,9 @@ let isRoomLocked = false;
 let myInviteToken = null;
 let myInviteExpires = null;
 const peerAudioNodes = {};   // { socketId: { source, panner } }
+let pinnedTileId = null;     // id del tile anclado en pantalla grande, null = vista de galería
+const peerMicState = {};     // { socketId: bool } último estado de mic conocido de cada peer
+const peerCamState = {};     // { socketId: bool } último estado de cámara conocido de cada peer
 
 // peerConnections: { socketId: RTCPeerConnection }
 const peerConnections = {};
@@ -111,9 +114,14 @@ function addVideoTile(stream, nick, tileId, muted = false) {
         <p>${nick}</p>
       </div>
       <div class="tile-label">${nick}</div>
+      <div class="tile-indicators" id="${tileId}-indicators"></div>
+      <button class="tile-pin-btn" onclick="togglePin('${tileId}')" title="Anclar / quitar anclaje">📌</button>
+      <button class="tile-fullscreen-btn" onclick="toggleTileFullscreen('${tileId}')" title="Pantalla completa">⛶</button>
       ${isRemote ? `
         <button class="tile-mod-btn" onclick="toggleTileMenu('${tileId}')">⋮</button>
         <div class="tile-mod-menu" id="mod-menu-${tileId}">
+          <button id="mod-mic-${socketId}" onclick="hostToggleMic('${socketId}')">Silenciar su micrófono</button>
+          <button id="mod-cam-${socketId}" onclick="hostToggleCam('${socketId}')">Apagar su cámara</button>
           <button onclick="demotePeer('${socketId}')">Enviar a sala de espera</button>
           <button class="tm-expel" onclick="expelPeer('${socketId}')">Expulsar de la sala</button>
         </div>
@@ -136,16 +144,87 @@ function addVideoTile(stream, nick, tileId, muted = false) {
 function removeVideoTile(tileId) {
   const tile = document.getElementById(tileId);
   if (tile) tile.remove();
+  if (pinnedTileId === tileId) { pinnedTileId = null; updateGalleryButton(); }
   updateGridLayout();
 }
 
 function updateGridLayout() {
   const container = document.getElementById('videos-container');
-  const count = container.querySelectorAll('.video-tile').length;
+  const tiles = container.querySelectorAll('.video-tile');
+  const count = tiles.length;
   container.className = '';
+
+  if (pinnedTileId && document.getElementById(pinnedTileId)) {
+    container.classList.add('pinned-view');
+    tiles.forEach(t => t.classList.toggle('pinned-tile', t.id === pinnedTileId));
+    return;
+  }
+
   if (count === 2) container.classList.add('two-peers');
   else if (count === 3) container.classList.add('three-peers');
   else if (count >= 4) container.classList.add('four-peers');
+}
+
+// ── Anclar / pantalla completa ───────────────────────────────────
+function togglePin(tileId) {
+  pinnedTileId = (pinnedTileId === tileId) ? null : tileId;
+  updateGridLayout();
+  updateGalleryButton();
+}
+
+function unpinAll() {
+  pinnedTileId = null;
+  updateGridLayout();
+  updateGalleryButton();
+}
+
+function updateGalleryButton() {
+  const btn = document.getElementById('gallery-btn');
+  if (btn) btn.style.display = pinnedTileId ? 'inline-block' : 'none';
+}
+
+function toggleTileFullscreen(tileId) {
+  const tile = document.getElementById(tileId);
+  if (!tile) return;
+  if (document.fullscreenElement) {
+    document.exitFullscreen();
+  } else {
+    tile.requestFullscreen().catch(() => toast('No se pudo entrar a pantalla completa'));
+  }
+}
+
+// ── Indicadores de mic/cámara de otros + controles del host ──────
+function reportPeerState() {
+  if (socket) socket.emit('peer-state', { micOn, camOn });
+}
+
+function updatePeerIndicators(socketId, pMic, pCam) {
+  peerMicState[socketId] = pMic;
+  peerCamState[socketId] = pCam;
+  const indicators = document.getElementById(`tile-${socketId}-indicators`);
+  if (indicators) {
+    indicators.innerHTML =
+      (pMic === false ? '<span class="tile-ind">🔇</span>' : '') +
+      (pCam === false ? '<span class="tile-ind">🚫🎥</span>' : '');
+  }
+  const micBtn = document.getElementById(`mod-mic-${socketId}`);
+  if (micBtn) micBtn.textContent = pMic === false ? 'Activar su micrófono' : 'Silenciar su micrófono';
+  const camBtn = document.getElementById(`mod-cam-${socketId}`);
+  if (camBtn) camBtn.textContent = pCam === false ? 'Encender su cámara' : 'Apagar su cámara';
+}
+
+function hostToggleMic(socketId) {
+  if (!socket || !isHost) return;
+  const newMicOn = peerMicState[socketId] === false;
+  socket.emit('host-force-mic', { socketId, micOn: newMicOn });
+  document.querySelectorAll('.tile-mod-menu.show').forEach(m => m.classList.remove('show'));
+}
+
+function hostToggleCam(socketId) {
+  if (!socket || !isHost) return;
+  const newCamOn = peerCamState[socketId] === false;
+  socket.emit('host-force-cam', { socketId, camOn: newCamOn });
+  document.querySelectorAll('.tile-mod-menu.show').forEach(m => m.classList.remove('show'));
 }
 
 // ── WebRTC ──────────────────────────────────────────────────────
@@ -235,6 +314,32 @@ function connectSocket(roomId, nick, invite) {
 
   socket.on('chat-message', ({ nick: fromNick, message, ts }) => {
     addChatMessage(fromNick, message, fromNick === myNick);
+  });
+
+  // ── Indicadores de mic/cámara + control remoto del host ──────────
+  socket.on('peer-state', ({ socketId, micOn: pMic, camOn: pCam }) => {
+    updatePeerIndicators(socketId, pMic, pCam);
+  });
+
+  socket.on('forced-mic', ({ micOn: forcedMicOn }) => {
+    micOn = forcedMicOn;
+    if (localStream) localStream.getAudioTracks().forEach(t => t.enabled = micOn);
+    if (micGainNode) micGainNode.gain.value = micOn ? 1 : 0;
+    const btn = document.getElementById('mic-btn');
+    if (btn) btn.classList.toggle('off', !micOn);
+    toast(micOn ? 'El host activó tu micrófono' : 'El host te silenció');
+    reportPeerState();
+  });
+
+  socket.on('forced-cam', ({ camOn: forcedCamOn }) => {
+    camOn = forcedCamOn;
+    if (localStream) localStream.getVideoTracks().forEach(t => t.enabled = camOn);
+    const tile = document.getElementById('tile-local');
+    if (tile) tile.classList.toggle('cam-off', !camOn);
+    const btn = document.getElementById('cam-btn');
+    if (btn) btn.classList.toggle('off', !camOn);
+    toast(camOn ? 'El host encendió tu cámara' : 'El host apagó tu cámara');
+    reportPeerState();
   });
 
   // ── Sala de espera ──────────────────────────────────────────────
@@ -339,11 +444,13 @@ function connectSocket(roomId, nick, invite) {
       await pc.setLocalDescription(offer);
       socket.emit('offer', { to: peer.socketId, offer });
     }
+    reportPeerState();
   });
 
   // Nuevo peer llegó → lo notifican a nosotros
   socket.on('peer-joined', ({ nick: pNick, socketId }) => {
     toast(`${pNick} se unió`);
+    reportPeerState();
   });
 
   // Recibimos offer de alguien → respondemos
@@ -436,6 +543,7 @@ function toggleMic() {
   const btn = document.getElementById('mic-btn');
   btn.classList.toggle('off', !micOn);
   btn.title = micOn ? 'Silenciar' : 'Activar micrófono';
+  reportPeerState();
 }
 
 function toggleCam() {
@@ -445,6 +553,7 @@ function toggleCam() {
   if (tile) tile.classList.toggle('cam-off', !camOn);
   const btn = document.getElementById('cam-btn');
   btn.classList.toggle('off', !camOn);
+  reportPeerState();
 }
 
 // ── Compartir pantalla ───────────────────────────────────────────
@@ -863,6 +972,10 @@ function updateLockButton() {
 function hangUp() {
   isHost = false;
   isRoomLocked = false;
+  pinnedTileId = null;
+  Object.keys(peerMicState).forEach(k => delete peerMicState[k]);
+  Object.keys(peerCamState).forEach(k => delete peerCamState[k]);
+  updateGalleryButton();
   myInviteToken = null;
   myInviteExpires = null;
   updateLockButton();

@@ -753,3 +753,59 @@ input::placeholder { color: var(--text-dim); }
 }
 .tile-mod-menu button:hover { background: var(--surface2); }
 .tile-mod-menu button.tm-expel { color: var(--danger); }
+
+/* ── Anclar / pantalla completa / indicadores (mejora) ──────────── */
+.tile-indicators {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: flex;
+  gap: 4px;
+  font-size: 15px;
+  z-index: 2;
+}
+.tile-ind {
+  background: rgba(0,0,0,0.55);
+  border-radius: 4px;
+  padding: 2px 5px;
+}
+
+.tile-pin-btn,
+.tile-fullscreen-btn {
+  position: absolute;
+  top: 8px;
+  display: none;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(0,0,0,0.55);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+}
+.tile-pin-btn { right: 8px; }
+.tile-fullscreen-btn { right: 38px; }
+.video-tile:hover .tile-pin-btn,
+.video-tile:hover .tile-fullscreen-btn {
+  display: flex;
+}
+.video-tile.pinned-tile .tile-pin-btn {
+  display: flex;
+  background: var(--accent);
+  color: #000;
+}
+
+#videos-container.pinned-view {
+  display: flex;
+}
+#videos-container.pinned-view .video-tile {
+  display: none;
+}
+#videos-container.pinned-view .video-tile.pinned-tile {
+  display: block;
+  flex: 1;
+}
