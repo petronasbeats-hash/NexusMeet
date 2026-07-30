@@ -41,30 +41,116 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../public/index.html'));
 });
 
-// Estado de las salas: { roomId: { socketId: { nick, socketId } } }
+// Estado de las salas:
+// { roomId: { host, peers, waiting, locked, inviteToken, inviteExpires } }
 const rooms = {};
+
+const INVITE_TTL_MS = 4 * 60 * 60 * 1000; // los enlaces de invitación duran 4 horas
+
+function generateInviteToken() {
+  return Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
+}
+
+function admitToRoom(io, rooms, sock, roomId, nick) {
+  sock.join(roomId);
+  const room = rooms[roomId];
+  room.peers[sock.id] = { nick, socketId: sock.id };
+
+  const peers = Object.values(room.peers).filter(p => p.socketId !== sock.id);
+
+  sock.emit('room-peers', peers);
+  sock.emit('you-are-host', room.host === sock.id);
+  sock.emit('invite-info', { token: room.inviteToken, expiresAt: room.inviteExpires });
+  sock.emit('room-lock-changed', room.locked);
+  sock.to(roomId).emit('peer-joined', { nick, socketId: sock.id });
+
+  console.log(`[sala:${roomId}] ${nick} se unió (${Object.keys(room.peers).length} en sala)`);
+}
 
 io.on('connection', (socket) => {
   console.log(`[+] Conectado: ${socket.id}`);
 
-  // Usuario se une a una sala
-  socket.on('join-room', ({ roomId, nick }) => {
-    socket.join(roomId);
+  // Usuario pide unirse a una sala
+  socket.on('join-room', ({ roomId, nick, invite }) => {
     socket.roomId = roomId;
     socket.nick = nick;
 
-    if (!rooms[roomId]) rooms[roomId] = {};
-    rooms[roomId][socket.id] = { nick, socketId: socket.id };
+    // Sala nueva: quien la crea entra directo y es el host
+    if (!rooms[roomId]) {
+      rooms[roomId] = {
+        host: socket.id,
+        peers: {},
+        waiting: {},
+        locked: false,
+        inviteToken: generateInviteToken(),
+        inviteExpires: Date.now() + INVITE_TTL_MS,
+      };
+      admitToRoom(io, rooms, socket, roomId, nick);
+      return;
+    }
 
-    const peers = Object.values(rooms[roomId]).filter(p => p.socketId !== socket.id);
+    const room = rooms[roomId];
 
-    // Notificar al nuevo usuario quiénes ya están en la sala
-    socket.emit('room-peers', peers);
+    // Sala bloqueada por el host: nadie más puede entrar aunque tenga el código
+    if (room.locked) {
+      socket.emit('room-locked');
+      return;
+    }
 
-    // Notificar a los demás que llegó alguien nuevo
-    socket.to(roomId).emit('peer-joined', { nick, socketId: socket.id });
+    // El enlace de invitación debe ser válido y no haber expirado
+    if (!invite || invite !== room.inviteToken || Date.now() > room.inviteExpires) {
+      socket.emit('invite-invalid');
+      return;
+    }
 
-    console.log(`[sala:${roomId}] ${nick} se unió (${Object.keys(rooms[roomId]).length} en sala)`);
+    const hostConnected = room.host && io.sockets.sockets.get(room.host);
+
+    if (hostConnected) {
+      // Hay host activo: pasa a la sala de espera hasta que lo apruebe
+      room.waiting[socket.id] = { nick, socketId: socket.id };
+      socket.emit('waiting-for-approval');
+      io.to(room.host).emit('join-request', { nick, socketId: socket.id });
+      return;
+    }
+
+    // No hay host conectado (se fue): esta persona toma el rol de host
+    room.host = socket.id;
+    admitToRoom(io, rooms, socket, roomId, nick);
+  });
+
+  // El host bloquea/desbloquea la sala
+  socket.on('lock-room', () => {
+    const room = rooms[socket.roomId];
+    if (!room || room.host !== socket.id) return;
+    room.locked = true;
+    io.to(socket.roomId).emit('room-lock-changed', true);
+  });
+
+  socket.on('unlock-room', () => {
+    const room = rooms[socket.roomId];
+    if (!room || room.host !== socket.id) return;
+    room.locked = false;
+    io.to(socket.roomId).emit('room-lock-changed', false);
+  });
+
+  // El host aprueba a alguien de la sala de espera
+  socket.on('admit-peer', ({ socketId }) => {
+    const room = rooms[socket.roomId];
+    if (!room || room.host !== socket.id) return; // solo el host puede admitir
+    const waiter = room.waiting[socketId];
+    if (!waiter) return;
+    delete room.waiting[socketId];
+
+    const waiterSocket = io.sockets.sockets.get(socketId);
+    if (waiterSocket) admitToRoom(io, rooms, waiterSocket, socket.roomId, waiter.nick);
+  });
+
+  // El host rechaza a alguien de la sala de espera
+  socket.on('reject-peer', ({ socketId }) => {
+    const room = rooms[socket.roomId];
+    if (!room || room.host !== socket.id) return;
+    delete room.waiting[socketId];
+    io.to(socketId).emit('join-rejected');
   });
 
   // Señalización WebRTC: offer
@@ -90,11 +176,37 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     const { roomId, nick } = socket;
-    if (roomId && rooms[roomId]) {
-      delete rooms[roomId][socket.id];
-      if (Object.keys(rooms[roomId]).length === 0) {
+    const room = rooms[roomId];
+    if (room) {
+      delete room.peers[socket.id];
+      delete room.waiting[socket.id];
+
+      if (Object.keys(room.peers).length === 0 && Object.keys(room.waiting).length === 0) {
         delete rooms[roomId];
       } else {
+        if (room.host === socket.id) {
+          // El host se fue: el siguiente peer más antiguo toma el rol
+          const nextHostId = Object.keys(room.peers)[0];
+          if (nextHostId) {
+            room.host = nextHostId;
+            io.to(nextHostId).emit('you-are-host', true);
+            // Reenviar al nuevo host las solicitudes de espera pendientes
+            Object.values(room.waiting).forEach(w => {
+              io.to(nextHostId).emit('join-request', { nick: w.nick, socketId: w.socketId });
+            });
+          } else {
+            // No quedan peers, pero hay gente esperando: el primero se vuelve host
+            const waitingIds = Object.keys(room.waiting);
+            if (waitingIds.length) {
+              const promotedId = waitingIds[0];
+              const promoted = room.waiting[promotedId];
+              delete room.waiting[promotedId];
+              room.host = promotedId;
+              const promotedSocket = io.sockets.sockets.get(promotedId);
+              if (promotedSocket) admitToRoom(io, rooms, promotedSocket, roomId, promoted.nick);
+            }
+          }
+        }
         socket.to(roomId).emit('peer-left', { socketId: socket.id, nick });
       }
     }

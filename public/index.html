@@ -56,6 +56,8 @@
       </div>
       <div class="room-meta">
         <span id="peers-badge" class="badge">Solo tú</span>
+        <span id="lock-badge" class="badge badge-locked" style="display:none">🔒 Bloqueada</span>
+        <button class="btn-ghost" id="lock-btn" onclick="toggleLock()" style="display:none">Bloquear sala</button>
         <button class="btn-ghost" onclick="copyInvite()" id="copy-btn">Copiar enlace ↗</button>
       </div>
     </header>
@@ -63,6 +65,18 @@
     <div id="videos-container">
       <!-- Videos se insertan dinámicamente -->
     </div>
+
+    <!-- Overlay: se muestra mientras el host no te ha dejado entrar -->
+    <div id="waiting-overlay" class="waiting-overlay">
+      <div class="waiting-box">
+        <div class="waiting-spinner"></div>
+        <p>Esperando que el host te deje entrar…</p>
+        <button class="btn-ghost" onclick="hangUp()">Cancelar</button>
+      </div>
+    </div>
+
+    <!-- Panel: solo lo ve el host, con solicitudes pendientes -->
+    <div id="join-requests" class="join-requests"></div>
 
     <div id="status-bar">
       <span id="status-text">Esperando participantes...</span>

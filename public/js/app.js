@@ -40,6 +40,10 @@ let audioShareStream = null; // stream de getDisplayMedia usado solo para tomar 
 let isAudioOnlyShare = false; // true si se está compartiendo audio de pestaña sin mostrar su video
 let spatialAudioContext = null;
 let spatialEnabled = false;
+let isHost = false;
+let isRoomLocked = false;
+let myInviteToken = null;
+let myInviteExpires = null;
 const peerAudioNodes = {};   // { socketId: { source, panner } }
 
 // peerConnections: { socketId: RTCPeerConnection }
@@ -204,19 +208,61 @@ function cleanupPeer(socketId) {
 }
 
 // ── Socket.io ───────────────────────────────────────────────────
-function connectSocket(roomId, nick) {
+function connectSocket(roomId, nick, invite) {
   socket = io();
 
   socket.on('connect', () => {
-    socket.emit('join-room', { roomId, nick });
+    socket.emit('join-room', { roomId, nick, invite });
   });
 
   socket.on('chat-message', ({ nick: fromNick, message, ts }) => {
     addChatMessage(fromNick, message, fromNick === myNick);
   });
 
+  // ── Sala de espera ──────────────────────────────────────────────
+  socket.on('waiting-for-approval', () => {
+    document.getElementById('waiting-overlay').classList.add('show');
+  });
+
+  socket.on('join-rejected', () => {
+    toast('El host no aprobó tu entrada a la sala');
+    hangUp();
+  });
+
+  socket.on('you-are-host', (value) => {
+    isHost = value;
+    updateLockButton();
+  });
+
+  socket.on('join-request', ({ nick: pNick, socketId }) => {
+    addJoinRequest(pNick, socketId);
+  });
+
+  // ── Invitación y bloqueo de sala ──────────────────────────────────
+  socket.on('invite-info', ({ token, expiresAt }) => {
+    myInviteToken = token;
+    myInviteExpires = expiresAt;
+  });
+
+  socket.on('invite-invalid', () => {
+    toast('Este enlace de invitación ya no es válido o expiró');
+    hangUp();
+  });
+
+  socket.on('room-locked', () => {
+    toast('Esta sala está bloqueada por el host');
+    hangUp();
+  });
+
+  socket.on('room-lock-changed', (locked) => {
+    isRoomLocked = locked;
+    updateLockButton();
+    toast(locked ? 'Sala bloqueada: nadie más puede entrar' : 'Sala desbloqueada');
+  });
+
   // Lista de peers ya en la sala → iniciar offer a cada uno
   socket.on('room-peers', async (peers) => {
+    document.getElementById('waiting-overlay').classList.remove('show');
     for (const peer of peers) {
       const pc = createPeerConnection(peer.socketId, peer.nick);
       const offer = await pc.createOffer();
@@ -265,7 +311,7 @@ async function createRoom() {
   if (!nick) { toast('Escribe tu nickname'); return; }
 
   const roomId = Math.random().toString(36).slice(2, 8).toUpperCase();
-  await startSession(nick, roomId);
+  await startSession(nick, roomId, null); // sala nueva: no necesita token, se genera en el server
 }
 
 async function joinRoom() {
@@ -273,10 +319,13 @@ async function joinRoom() {
   if (!nick) { toast('Escribe tu nickname'); return; }
   const room = document.getElementById('join-input').value.trim().toUpperCase();
   if (!room) { toast('Ingresa el código de sala'); return; }
-  await startSession(nick, room);
+
+  // El token de invitación solo es válido si el código coincide con el del enlace abierto
+  const invite = (roomFromUrl && room === roomFromUrl.toUpperCase()) ? inviteFromUrl : null;
+  await startSession(nick, room, invite);
 }
 
-async function startSession(nick, roomId) {
+async function startSession(nick, roomId, invite) {
   myNick = nick;
   myRoomId = roomId;
 
@@ -291,22 +340,22 @@ async function startSession(nick, roomId) {
   addVideoTile(localStream, nick + ' (tú)', 'tile-local', true);
   if (!camOn) document.getElementById('tile-local').classList.add('cam-off');
 
-  connectSocket(roomId, nick);
+  connectSocket(roomId, nick, invite);
 
-  // URL con código de sala
-  const url = `${window.location.origin}?room=${roomId}`;
   history.replaceState({}, '', `?room=${roomId}`);
-  document.getElementById('copy-btn').setAttribute('data-url', url);
 }
 
 function copyInvite() {
   const roomId = myRoomId;
-  const url = `${window.location.origin}?room=${roomId}`;
-  const text = `Únete a mi videollamada en Nexus Meet\nCódigo: ${roomId}\nEnlace: ${url}`;
+  const url = myInviteToken
+    ? `${window.location.origin}?room=${roomId}&invite=${myInviteToken}`
+    : `${window.location.origin}?room=${roomId}`;
+  const horas = myInviteExpires ? Math.max(1, Math.round((myInviteExpires - Date.now()) / 3600000)) : 4;
+  const text = `Únete a mi videollamada en Nexus Meet\nEnlace: ${url}\n(el enlace expira en ~${horas}h)`;
   if (navigator.clipboard) {
     navigator.clipboard.writeText(text).then(() => toast('¡Enlace copiado!'));
   } else {
-    prompt('Comparte este código:', roomId);
+    prompt('Comparte este enlace:', url);
   }
 }
 
@@ -577,7 +626,60 @@ function stopAudioOnlyShare() {
   toast('Dejaste de compartir audio');
 }
 
+function addJoinRequest(nick, socketId) {
+  const container = document.getElementById('join-requests');
+  if (!container || document.getElementById(`jr-${socketId}`)) return;
+
+  const card = document.createElement('div');
+  card.className = 'join-request-card';
+  card.id = `jr-${socketId}`;
+  card.innerHTML = `
+    <p><strong></strong> quiere entrar a la sala</p>
+    <div class="join-request-actions">
+      <button class="jr-accept">Aceptar</button>
+      <button class="jr-reject">Rechazar</button>
+    </div>
+  `;
+  card.querySelector('strong').textContent = nick;
+  card.querySelector('.jr-accept').onclick = () => respondJoinRequest(socketId, true);
+  card.querySelector('.jr-reject').onclick = () => respondJoinRequest(socketId, false);
+  container.appendChild(card);
+}
+
+function respondJoinRequest(socketId, accept) {
+  if (!socket) return;
+  socket.emit(accept ? 'admit-peer' : 'reject-peer', { socketId });
+  const card = document.getElementById(`jr-${socketId}`);
+  if (card) card.remove();
+}
+
+function toggleLock() {
+  if (!isHost) { toast('Solo el host puede bloquear la sala'); return; }
+  if (!socket) return;
+  socket.emit(isRoomLocked ? 'unlock-room' : 'lock-room');
+}
+
+function updateLockButton() {
+  const btn = document.getElementById('lock-btn');
+  const badge = document.getElementById('lock-badge');
+  if (btn) {
+    btn.style.display = isHost ? 'inline-block' : 'none';
+    btn.textContent = isRoomLocked ? 'Desbloquear sala' : 'Bloquear sala';
+  }
+  if (badge) badge.style.display = isRoomLocked ? 'inline-block' : 'none';
+}
+
 function hangUp() {
+  isHost = false;
+  isRoomLocked = false;
+  myInviteToken = null;
+  myInviteExpires = null;
+  updateLockButton();
+  const waitingOverlay = document.getElementById('waiting-overlay');
+  if (waitingOverlay) waitingOverlay.classList.remove('show');
+  const joinRequests = document.getElementById('join-requests');
+  if (joinRequests) joinRequests.innerHTML = '';
+
   // Apagar audio espacial si estaba activo
   if (spatialEnabled) { disableSpatialAudio(); spatialEnabled = false; }
 
@@ -612,6 +714,7 @@ function hangUp() {
 // ── Auto-join desde URL ──────────────────────────────────────────
 const params = new URLSearchParams(window.location.search);
 const roomFromUrl = params.get('room');
+const inviteFromUrl = params.get('invite');
 if (roomFromUrl) {
   document.getElementById('join-input').value = roomFromUrl.toUpperCase();
   document.getElementById('join-input').focus();
