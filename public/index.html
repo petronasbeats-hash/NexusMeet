@@ -57,6 +57,7 @@
       <div class="room-meta">
         <span id="peers-badge" class="badge">Solo tú</span>
         <span id="lock-badge" class="badge badge-locked" style="display:none">🔒 Bloqueada</span>
+        <button class="btn-ghost" id="rules-btn" onclick="openRulesEditor()" style="display:none">Reglas</button>
         <button class="btn-ghost" id="lock-btn" onclick="toggleLock()" style="display:none">Bloquear sala</button>
         <button class="btn-ghost" onclick="copyInvite()" id="copy-btn">Copiar enlace ↗</button>
       </div>
@@ -71,7 +72,39 @@
       <div class="waiting-box">
         <div class="waiting-spinner"></div>
         <p>Esperando que el host te deje entrar…</p>
+
+        <div class="waiting-rules">
+          <p class="waiting-rules-label">Reglas de la sala</p>
+          <p id="waiting-rules-text">—</p>
+          <label class="waiting-rules-check">
+            <input type="checkbox" id="rules-checkbox" onchange="document.getElementById('confirm-rules-btn').disabled = !this.checked">
+            He leído y entiendo las reglas
+          </label>
+          <button class="btn btn-secondary" id="confirm-rules-btn" disabled onclick="confirmRules()">Confirmar</button>
+          <p id="rules-confirmed-note" style="display:none">✅ Confirmado, esperando al host…</p>
+        </div>
+
+        <div class="waiting-chat">
+          <div id="waiting-chat-messages" class="waiting-chat-messages"></div>
+          <div class="waiting-chat-input-row">
+            <input type="text" id="waiting-chat-input" placeholder="Escríbele al host…" onkeydown="if(event.key==='Enter') sendWaitingChat()">
+            <button onclick="sendWaitingChat()">Enviar</button>
+          </div>
+        </div>
+
         <button class="btn-ghost" onclick="hangUp()">Cancelar</button>
+      </div>
+    </div>
+
+    <!-- Modal: el host edita las reglas de la sala -->
+    <div id="rules-editor" class="rules-editor">
+      <div class="rules-editor-box">
+        <p class="waiting-rules-label">Editar reglas de la sala</p>
+        <textarea id="rules-editor-textarea" rows="5"></textarea>
+        <div class="rules-editor-actions">
+          <button class="btn-ghost" onclick="closeRulesEditor()">Cancelar</button>
+          <button class="btn btn-secondary" onclick="saveRoomRules()">Guardar</button>
+        </div>
       </div>
     </div>
 
@@ -84,8 +117,9 @@
 
     <div id="chat-panel" class="chat-panel">
       <div id="chat-messages" class="chat-messages"></div>
+      <div id="mention-dropdown" class="mention-dropdown"></div>
       <div class="chat-input-row">
-        <input type="text" id="chat-input" placeholder="Escribe un mensaje..." onkeydown="if(event.key==='Enter') sendChatMessage()">
+        <input type="text" id="chat-input" placeholder="Escribe un mensaje... (usa @ para mencionar)" onkeydown="handleChatKeydown(event)" oninput="updateMentionDropdown()">
         <button onclick="sendChatMessage()">Enviar</button>
       </div>
     </div>

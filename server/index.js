@@ -51,6 +51,8 @@ function generateInviteToken() {
   return Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
 }
 
+const DEFAULT_RULES = 'Sé respetuoso con los demás participantes. No compartas contenido inapropiado. El host puede expulsar a quien no cumpla estas reglas.';
+
 function admitToRoom(io, rooms, sock, roomId, nick) {
   sock.join(roomId);
   const room = rooms[roomId];
@@ -86,6 +88,8 @@ io.on('connection', (socket) => {
         inviteToken: generateInviteToken(),
         inviteExpires: Date.now() + INVITE_TTL_MS,
         hostToken, // identifica al creador original, para que pueda reclamar el rol si vuelve
+        rules: DEFAULT_RULES,
+        bannedNicks: new Set(),
       };
       admitToRoom(io, rooms, socket, roomId, nick);
       socket.emit('host-token', hostToken);
@@ -108,6 +112,12 @@ io.on('connection', (socket) => {
       return;
     }
 
+    // Si fue expulsado de esta sala, no puede volver a entrar con el mismo nick
+    if (room.bannedNicks.has(nick.toLowerCase())) {
+      socket.emit('you-are-banned');
+      return;
+    }
+
     // Sala bloqueada por el host: nadie más puede entrar aunque tenga el código
     if (room.locked) {
       socket.emit('room-locked');
@@ -124,8 +134,9 @@ io.on('connection', (socket) => {
 
     if (hostConnected) {
       // Hay host activo: pasa a la sala de espera hasta que lo apruebe
-      room.waiting[socket.id] = { nick, socketId: socket.id };
+      room.waiting[socket.id] = { nick, socketId: socket.id, rulesAccepted: false };
       socket.emit('waiting-for-approval');
+      socket.emit('room-rules', room.rules);
       io.to(room.host).emit('join-request', { nick, socketId: socket.id });
       return;
     }
@@ -148,6 +159,79 @@ io.on('connection', (socket) => {
     if (!room || room.host !== socket.id) return;
     room.locked = false;
     io.to(socket.roomId).emit('room-lock-changed', false);
+  });
+
+  // El host define/edita las reglas de la sala
+  socket.on('set-room-rules', ({ text }) => {
+    const room = rooms[socket.roomId];
+    if (!room || room.host !== socket.id || typeof text !== 'string') return;
+    room.rules = text.slice(0, 1000);
+    // Reenviar a todos los que siguen esperando
+    Object.keys(room.waiting).forEach(socketId => {
+      io.to(socketId).emit('room-rules', room.rules);
+    });
+  });
+
+  // Alguien en la sala de espera confirma que leyó y entendió las reglas
+  socket.on('confirm-rules', () => {
+    const room = rooms[socket.roomId];
+    if (!room) return;
+    const waiter = room.waiting[socket.id];
+    if (!waiter) return;
+    waiter.rulesAccepted = true;
+    if (room.host) io.to(room.host).emit('waiting-rules-confirmed', { socketId: socket.id });
+  });
+
+  // Chat privado entre el host y alguien en la sala de espera
+  socket.on('waiting-chat-to-host', ({ message }) => {
+    const room = rooms[socket.roomId];
+    if (!room || !room.waiting[socket.id] || !message) return;
+    if (room.host) {
+      io.to(room.host).emit('waiting-chat-message', {
+        socketId: socket.id, nick: socket.nick, message, fromHost: false,
+      });
+    }
+  });
+
+  socket.on('waiting-chat-to-waiter', ({ socketId, message }) => {
+    const room = rooms[socket.roomId];
+    if (!room || room.host !== socket.id || !message) return;
+    if (room.waiting[socketId]) {
+      io.to(socketId).emit('waiting-chat-message', { message, fromHost: true });
+    }
+  });
+
+  // El host manda de vuelta a la sala de espera a alguien que ya estaba dentro
+  socket.on('demote-peer', ({ socketId }) => {
+    const room = rooms[socket.roomId];
+    if (!room || room.host !== socket.id || socketId === socket.id) return;
+    const peer = room.peers[socketId];
+    if (!peer) return;
+    delete room.peers[socketId];
+    room.waiting[socketId] = { nick: peer.nick, socketId, rulesAccepted: false };
+
+    const targetSocket = io.sockets.sockets.get(socketId);
+    if (targetSocket) {
+      targetSocket.emit('sent-to-waiting-room');
+      targetSocket.emit('room-rules', room.rules);
+    }
+    socket.to(socket.roomId).emit('peer-left', { socketId, nick: peer.nick });
+    io.to(socket.id).emit('join-request', { nick: peer.nick, socketId });
+  });
+
+  // El host expulsa a alguien: no puede volver a entrar con el mismo nick
+  socket.on('expel-peer', ({ socketId }) => {
+    const room = rooms[socket.roomId];
+    if (!room || room.host !== socket.id || socketId === socket.id) return;
+    const peer = room.peers[socketId] || room.waiting[socketId];
+    if (!peer) return;
+    delete room.peers[socketId];
+    delete room.waiting[socketId];
+    room.bannedNicks.add(peer.nick.toLowerCase());
+
+    const targetSocket = io.sockets.sockets.get(socketId);
+    if (targetSocket) targetSocket.emit('expelled-from-room');
+    socket.to(socket.roomId).emit('peer-left', { socketId, nick: peer.nick });
   });
 
   // El host aprueba a alguien de la sala de espera

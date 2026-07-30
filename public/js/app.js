@@ -102,6 +102,8 @@ function addVideoTile(stream, nick, tileId, muted = false) {
     tile = document.createElement('div');
     tile.className = 'video-tile';
     tile.id = tileId;
+    const isRemote = tileId !== 'tile-local';
+    const socketId = isRemote ? tileId.slice(5) : null;
     tile.innerHTML = `
       <video autoplay ${muted ? 'muted' : ''} playsinline></video>
       <div class="tile-no-cam">
@@ -109,6 +111,13 @@ function addVideoTile(stream, nick, tileId, muted = false) {
         <p>${nick}</p>
       </div>
       <div class="tile-label">${nick}</div>
+      ${isRemote ? `
+        <button class="tile-mod-btn" onclick="toggleTileMenu('${tileId}')">⋮</button>
+        <div class="tile-mod-menu" id="mod-menu-${tileId}">
+          <button onclick="demotePeer('${socketId}')">Enviar a sala de espera</button>
+          <button class="tm-expel" onclick="expelPeer('${socketId}')">Expulsar de la sala</button>
+        </div>
+      ` : ''}
     `;
     container.appendChild(tile);
   }
@@ -245,6 +254,58 @@ function connectSocket(roomId, nick, invite) {
 
   socket.on('join-request', ({ nick: pNick, socketId }) => {
     addJoinRequest(pNick, socketId);
+  });
+
+  // ── Reglas de la sala ─────────────────────────────────────────────
+  socket.on('room-rules', (text) => {
+    currentRoomRules = text;
+    const el = document.getElementById('waiting-rules-text');
+    if (el) el.textContent = text;
+    // Si ya estaba esperando y le vuelven a mandar reglas (p. ej. tras un demote), resetear el estado
+    const checkbox = document.getElementById('rules-checkbox');
+    const confirmBtn = document.getElementById('confirm-rules-btn');
+    const note = document.getElementById('rules-confirmed-note');
+    if (checkbox) { checkbox.checked = false; checkbox.disabled = false; }
+    if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.style.display = 'inline-block'; }
+    if (note) note.style.display = 'none';
+  });
+
+  socket.on('waiting-rules-confirmed', ({ socketId }) => {
+    markRulesConfirmed(socketId);
+  });
+
+  // ── Chat privado con quien espera ─────────────────────────────────
+  socket.on('waiting-chat-message', (data) => {
+    if (data.fromHost) {
+      // Soy el que espera: me llegó un mensaje del host
+      appendWaitingChatMessage('Host', data.message, true);
+    } else {
+      // Soy el host: me llegó un mensaje de alguien en espera
+      appendJrChatMessage(data.socketId, data.nick, data.message, false);
+    }
+  });
+
+  // ── Moderación: me mandaron de vuelta a espera / me expulsaron ────
+  socket.on('sent-to-waiting-room', () => {
+    toast('El host te envió de vuelta a la sala de espera');
+    // Cerrar conexiones activas pero mantener el socket conectado
+    Object.values(peerConnections).forEach(pc => pc.close());
+    Object.keys(peerConnections).forEach(k => delete peerConnections[k]);
+    Object.keys(peerNicks).forEach(k => delete peerNicks[k]);
+    document.getElementById('videos-container').querySelectorAll('.video-tile:not(#tile-local)').forEach(t => t.remove());
+    isHost = false;
+    updateLockButton();
+    document.getElementById('waiting-overlay').classList.add('show');
+  });
+
+  socket.on('expelled-from-room', () => {
+    toast('Fuiste expulsado de esta sala');
+    hangUp();
+  });
+
+  socket.on('you-are-banned', () => {
+    toast('No puedes entrar: fuiste expulsado de esta sala anteriormente');
+    hangUp();
   });
 
   // ── Invitación y bloqueo de sala ──────────────────────────────────
@@ -644,15 +705,59 @@ function addJoinRequest(nick, socketId) {
   card.id = `jr-${socketId}`;
   card.innerHTML = `
     <p><strong></strong> quiere entrar a la sala</p>
+    <p class="jr-status">⏳ Aún no confirma haber leído las reglas</p>
     <div class="join-request-actions">
-      <button class="jr-accept">Aceptar</button>
+      <button class="jr-accept" disabled title="Debe confirmar las reglas primero">Aceptar</button>
       <button class="jr-reject">Rechazar</button>
+    </div>
+    <button class="jr-chat-toggle">💬 Mensaje privado</button>
+    <div class="jr-chat">
+      <div class="jr-chat-messages"></div>
+      <div class="jr-chat-input-row">
+        <input type="text" placeholder="Escríbele…">
+        <button class="jr-chat-send">Enviar</button>
+      </div>
     </div>
   `;
   card.querySelector('strong').textContent = nick;
   card.querySelector('.jr-accept').onclick = () => respondJoinRequest(socketId, true);
   card.querySelector('.jr-reject').onclick = () => respondJoinRequest(socketId, false);
+  card.querySelector('.jr-chat-toggle').onclick = () => {
+    card.querySelector('.jr-chat').classList.toggle('show');
+  };
+  const sendJrChat = () => {
+    const input = card.querySelector('.jr-chat-input-row input');
+    const message = input.value.trim();
+    if (!message || !socket) return;
+    socket.emit('waiting-chat-to-waiter', { socketId, message });
+    appendJrChatMessage(socketId, 'Tú', message, true);
+    input.value = '';
+  };
+  card.querySelector('.jr-chat-send').onclick = sendJrChat;
+  card.querySelector('.jr-chat-input-row input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') sendJrChat();
+  });
   container.appendChild(card);
+}
+
+function markRulesConfirmed(socketId) {
+  const card = document.getElementById(`jr-${socketId}`);
+  if (!card) return;
+  const status = card.querySelector('.jr-status');
+  if (status) { status.textContent = '✅ Confirmó haber leído las reglas'; status.classList.add('confirmed'); }
+  const acceptBtn = card.querySelector('.jr-accept');
+  if (acceptBtn) { acceptBtn.disabled = false; acceptBtn.removeAttribute('title'); }
+}
+
+function appendJrChatMessage(socketId, nick, message, isMine) {
+  const card = document.getElementById(`jr-${socketId}`);
+  if (!card) return;
+  const list = card.querySelector('.jr-chat-messages');
+  const div = document.createElement('div');
+  div.className = 'wc-msg' + (isMine ? '' : ' from-host');
+  div.textContent = `${nick}: ${message}`;
+  list.appendChild(div);
+  list.scrollTop = list.scrollHeight;
 }
 
 function respondJoinRequest(socketId, accept) {
@@ -660,6 +765,77 @@ function respondJoinRequest(socketId, accept) {
   socket.emit(accept ? 'admit-peer' : 'reject-peer', { socketId });
   const card = document.getElementById(`jr-${socketId}`);
   if (card) card.remove();
+}
+
+// ── Reglas de la sala ────────────────────────────────────────────
+let currentRoomRules = '';
+
+function confirmRules() {
+  if (!socket) return;
+  socket.emit('confirm-rules');
+  document.getElementById('confirm-rules-btn').style.display = 'none';
+  document.getElementById('rules-checkbox').disabled = true;
+  document.getElementById('rules-confirmed-note').style.display = 'block';
+}
+
+function sendWaitingChat() {
+  const input = document.getElementById('waiting-chat-input');
+  const message = input.value.trim();
+  if (!message || !socket) return;
+  socket.emit('waiting-chat-to-host', { message });
+  appendWaitingChatMessage('Tú', message, false);
+  input.value = '';
+}
+
+function appendWaitingChatMessage(nick, message, fromHost) {
+  const list = document.getElementById('waiting-chat-messages');
+  if (!list) return;
+  const div = document.createElement('div');
+  div.className = 'wc-msg' + (fromHost ? ' from-host' : '');
+  div.textContent = `${nick}: ${message}`;
+  list.appendChild(div);
+  list.scrollTop = list.scrollHeight;
+}
+
+function openRulesEditor() {
+  if (!isHost) return;
+  document.getElementById('rules-editor-textarea').value = currentRoomRules;
+  document.getElementById('rules-editor').classList.add('show');
+}
+
+function closeRulesEditor() {
+  document.getElementById('rules-editor').classList.remove('show');
+}
+
+function saveRoomRules() {
+  const text = document.getElementById('rules-editor-textarea').value.trim();
+  if (!text || !socket) return;
+  socket.emit('set-room-rules', { text });
+  currentRoomRules = text;
+  closeRulesEditor();
+  toast('Reglas actualizadas');
+}
+
+// ── Moderación de participantes (solo host) ──────────────────────
+function toggleTileMenu(tileId) {
+  document.querySelectorAll('.tile-mod-menu').forEach(m => {
+    if (m.id !== `mod-menu-${tileId}`) m.classList.remove('show');
+  });
+  const menu = document.getElementById(`mod-menu-${tileId}`);
+  if (menu) menu.classList.toggle('show');
+}
+
+function demotePeer(socketId) {
+  if (!socket || !isHost) return;
+  socket.emit('demote-peer', { socketId });
+  document.querySelectorAll('.tile-mod-menu.show').forEach(m => m.classList.remove('show'));
+}
+
+function expelPeer(socketId) {
+  if (!socket || !isHost) return;
+  if (!confirm('¿Expulsar a este participante? No podrá volver a entrar con el mismo nombre.')) return;
+  socket.emit('expel-peer', { socketId });
+  document.querySelectorAll('.tile-mod-menu.show').forEach(m => m.classList.remove('show'));
 }
 
 function toggleLock() {
@@ -676,6 +852,12 @@ function updateLockButton() {
     btn.textContent = isRoomLocked ? 'Desbloquear sala' : 'Bloquear sala';
   }
   if (badge) badge.style.display = isRoomLocked ? 'inline-block' : 'none';
+
+  const rulesBtn = document.getElementById('rules-btn');
+  if (rulesBtn) rulesBtn.style.display = isHost ? 'inline-block' : 'none';
+
+  const videosContainer = document.getElementById('videos-container');
+  if (videosContainer) videosContainer.classList.toggle('host-mode', isHost);
 }
 
 function hangUp() {
@@ -730,15 +912,46 @@ if (roomFromUrl) {
 }
 
 
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function getKnownNicks() {
+  return [myNick, ...Object.values(peerNicks)].filter(Boolean);
+}
+
+// Envuelve las @menciones de participantes conocidos en un <span> resaltado
+function renderMessageHtml(message) {
+  let html = escapeHtml(message);
+  getKnownNicks().forEach(nick => {
+    const safeNick = nick.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`@${safeNick}\\b`, 'gi');
+    html = html.replace(re, `<span class="mention">@${escapeHtml(nick)}</span>`);
+  });
+  return html;
+}
+
+function messageMentionsMe(message) {
+  if (!myNick) return false;
+  const safeNick = myNick.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`@${safeNick}\\b`, 'i');
+  return re.test(message);
+}
+
 function addChatMessage(nick, message, isMine) {
   const list = document.getElementById('chat-messages');
   if (!list) return;
+  const mentioned = !isMine && messageMentionsMe(message);
   const div = document.createElement('div');
-  div.className = 'chat-msg' + (isMine ? ' mine' : '');
-  div.innerHTML = `<span class="chat-nick">${nick}:</span> <span class="chat-text"></span>`;
-  div.querySelector('.chat-text').textContent = message;
+  div.className = 'chat-msg' + (isMine ? ' mine' : '') + (mentioned ? ' mentioned' : '');
+  div.innerHTML = `<span class="chat-nick"></span> <span class="chat-text"></span>`;
+  div.querySelector('.chat-nick').textContent = nick + ':';
+  div.querySelector('.chat-text').innerHTML = renderMessageHtml(message);
   list.appendChild(div);
   list.scrollTop = list.scrollHeight;
+  if (mentioned) toast(`${nick} te mencionó`);
 }
 
 function sendChatMessage() {
@@ -747,9 +960,112 @@ function sendChatMessage() {
   if (!message || !socket) return;
   socket.emit('chat-message', { roomId: myRoomId, nick: myNick, message });
   input.value = '';
+  closeMentionDropdown();
 }
 
 function toggleChat() {
   const panel = document.getElementById('chat-panel');
   if (panel) panel.classList.toggle('open');
+}
+
+// ── Autocompletado de @mentions ──────────────────────────────────
+let mentionMatches = [];
+let mentionActiveIndex = -1;
+let mentionAnchorStart = -1; // posición del "@" dentro del input
+
+function getMentionQuery(input) {
+  const value = input.value;
+  const pos = input.selectionStart;
+  const upToCursor = value.slice(0, pos);
+  const match = upToCursor.match(/(?:^|\s)@([a-zA-Z0-9_]*)$/);
+  if (!match) return null;
+  return { query: match[1], start: pos - match[1].length - 1 };
+}
+
+function updateMentionDropdown() {
+  const input = document.getElementById('chat-input');
+  const dropdown = document.getElementById('mention-dropdown');
+  if (!input || !dropdown) return;
+
+  const context = getMentionQuery(input);
+  if (!context) { closeMentionDropdown(); return; }
+
+  const query = context.query.toLowerCase();
+  const candidates = Object.values(peerNicks).filter(n => n.toLowerCase().startsWith(query));
+
+  if (!candidates.length) { closeMentionDropdown(); return; }
+
+  mentionMatches = candidates;
+  mentionActiveIndex = 0;
+  mentionAnchorStart = context.start;
+
+  dropdown.innerHTML = '';
+  candidates.forEach((nick, i) => {
+    const item = document.createElement('div');
+    item.className = 'mention-item' + (i === 0 ? ' active' : '');
+    item.textContent = nick;
+    item.onclick = () => selectMention(nick);
+    dropdown.appendChild(item);
+  });
+  dropdown.classList.add('show');
+}
+
+function closeMentionDropdown() {
+  mentionMatches = [];
+  mentionActiveIndex = -1;
+  mentionAnchorStart = -1;
+  const dropdown = document.getElementById('mention-dropdown');
+  if (dropdown) { dropdown.classList.remove('show'); dropdown.innerHTML = ''; }
+}
+
+function selectMention(nick) {
+  const input = document.getElementById('chat-input');
+  if (!input || mentionAnchorStart < 0) return;
+  const before = input.value.slice(0, mentionAnchorStart);
+  const after = input.value.slice(input.selectionStart);
+  const insertion = `@${nick} `;
+  input.value = before + insertion + after;
+  const cursorPos = (before + insertion).length;
+  input.setSelectionRange(cursorPos, cursorPos);
+  input.focus();
+  closeMentionDropdown();
+}
+
+function handleChatKeydown(event) {
+  const dropdown = document.getElementById('mention-dropdown');
+  const isOpen = dropdown && dropdown.classList.contains('show');
+
+  if (isOpen && mentionMatches.length) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      mentionActiveIndex = (mentionActiveIndex + 1) % mentionMatches.length;
+      highlightMentionItem();
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      mentionActiveIndex = (mentionActiveIndex - 1 + mentionMatches.length) % mentionMatches.length;
+      highlightMentionItem();
+      return;
+    }
+    if (event.key === 'Enter' || event.key === 'Tab') {
+      event.preventDefault();
+      selectMention(mentionMatches[mentionActiveIndex]);
+      return;
+    }
+    if (event.key === 'Escape') {
+      closeMentionDropdown();
+      return;
+    }
+  }
+
+  if (event.key === 'Enter') sendChatMessage();
+}
+
+function highlightMentionItem() {
+  const dropdown = document.getElementById('mention-dropdown');
+  if (!dropdown) return;
+  [...dropdown.children].forEach((item, i) => {
+    item.classList.toggle('active', i === mentionActiveIndex);
+  });
 }

@@ -431,7 +431,9 @@ input::placeholder { color: var(--text-dim); }
 }
 .chat-msg { margin: 4px 0; font-size: 14px; color: #eee; }
 .chat-msg.mine .chat-nick { color: #4ade80; }
+.chat-msg.mentioned { background: rgba(200,240,74,0.14); border-radius: 6px; padding: 4px 6px; }
 .chat-nick { font-weight: bold; }
+.mention { color: var(--accent); font-weight: 600; }
 .chat-input-row { display: flex; gap: 6px; }
 .chat-input-row input {
   flex: 1;
@@ -447,43 +449,26 @@ input::placeholder { color: var(--text-dim); }
   cursor: pointer;
 }
 
-.chat-panel {
+.mention-dropdown {
   display: none;
-  position: fixed;
-  right: 16px;
-  bottom: 90px;
-  width: 300px;
-  max-height: 400px;
-  background: rgba(20,20,20,0.95);
-  border-radius: 12px;
   flex-direction: column;
-  padding: 10px;
-  z-index: 50;
-}
-.chat-panel.open { display: flex; }
-.chat-messages {
-  flex: 1;
+  max-height: 140px;
   overflow-y: auto;
-  margin-bottom: 8px;
-  max-height: 320px;
+  background: #1c1c1e;
+  border-radius: 8px;
+  margin-bottom: 6px;
+  border: 0.5px solid var(--border-hover);
 }
-.chat-msg { margin: 4px 0; font-size: 14px; color: #eee; }
-.chat-msg.mine .chat-nick { color: #4ade80; }
-.chat-nick { font-weight: bold; }
-.chat-input-row { display: flex; gap: 6px; }
-.chat-input-row input {
-  flex: 1;
-  padding: 6px 8px;
-  border-radius: 6px;
-  border: none;
-}
-.chat-input-row button {
-  padding: 6px 10px;
-  border-radius: 6px;
-  border: none;
-  background: #4ade80;
+.mention-dropdown.show { display: flex; }
+.mention-item {
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: var(--font-mono);
+  color: var(--text);
   cursor: pointer;
 }
+.mention-item:hover, .mention-item.active { background: var(--accent-dim); color: var(--accent); }
+
 
 /* ── Sala de espera ────────────────────────────────────────────── */
 .waiting-overlay {
@@ -503,12 +488,16 @@ input::placeholder { color: var(--text-dim); }
   align-items: center;
   gap: 16px;
   padding: 32px;
+  max-height: 90vh;
+  overflow-y: auto;
+  width: 100%;
+  max-width: 380px;
 }
 .waiting-box p {
   font-family: var(--font-mono);
   font-size: 14px;
   color: var(--text);
-  max-width: 260px;
+  max-width: 340px;
 }
 .waiting-spinner {
   width: 40px;
@@ -563,3 +552,204 @@ input::placeholder { color: var(--text-dim); }
   border-color: var(--danger);
   color: var(--danger);
 }
+
+/* ── Reglas de la sala (dentro del overlay de espera) ───────────── */
+.waiting-rules {
+  width: 100%;
+  text-align: left;
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.waiting-rules-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+#waiting-rules-text {
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.5;
+  max-width: none;
+}
+.waiting-rules-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-family: var(--font-mono);
+  color: var(--text);
+  cursor: pointer;
+}
+#rules-confirmed-note {
+  font-size: 13px;
+  color: var(--accent);
+  max-width: none;
+}
+
+/* ── Chat con el host mientras esperas ────────────────────────────── */
+.waiting-chat {
+  width: 100%;
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.waiting-chat-messages {
+  max-height: 120px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+}
+.waiting-chat-messages .wc-msg { font-size: 13px; color: var(--text); }
+.waiting-chat-messages .wc-msg.from-host { color: var(--accent); }
+.waiting-chat-input-row { display: flex; gap: 6px; }
+.waiting-chat-input-row input {
+  flex: 1;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: none;
+}
+.waiting-chat-input-row button {
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: none;
+  background: var(--accent);
+  cursor: pointer;
+}
+
+/* ── Modal de edición de reglas (host) ────────────────────────────── */
+.rules-editor {
+  display: none;
+  position: absolute;
+  inset: 0;
+  background: rgba(5,5,6,0.92);
+  z-index: 60;
+  align-items: center;
+  justify-content: center;
+}
+.rules-editor.show { display: flex; }
+.rules-editor-box {
+  width: 90%;
+  max-width: 380px;
+  background: var(--surface);
+  border: 0.5px solid var(--border-hover);
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+#rules-editor-textarea {
+  width: 100%;
+  resize: vertical;
+  border-radius: 8px;
+  border: 0.5px solid var(--border);
+  background: #0d0d0f;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 10px;
+}
+.rules-editor-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* ── Extras en la tarjeta de solicitud (confirmación + chat) ──────── */
+.jr-status { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
+.jr-status.confirmed { color: var(--accent); }
+.jr-chat-toggle {
+  font-size: 12px;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0;
+  margin-top: 6px;
+}
+.jr-chat {
+  display: none;
+  margin-top: 8px;
+  border-top: 0.5px solid var(--border);
+  padding-top: 8px;
+}
+.jr-chat.show { display: block; }
+.jr-chat-messages {
+  max-height: 90px;
+  overflow-y: auto;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+.jr-chat-input-row { display: flex; gap: 6px; }
+.jr-chat-input-row input {
+  flex: 1;
+  padding: 5px 7px;
+  border-radius: 6px;
+  border: none;
+  font-size: 12px;
+}
+.jr-chat-input-row button {
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: none;
+  background: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+}
+.join-request-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── Menú de moderación en los tiles de video (solo host) ─────────── */
+.tile-mod-btn {
+  display: none;
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0,0,0,0.55);
+  color: #fff;
+  cursor: pointer;
+  z-index: 5;
+  font-size: 16px;
+  line-height: 1;
+}
+#videos-container.host-mode .video-tile:not(#tile-local) .tile-mod-btn { display: block; }
+.tile-mod-menu {
+  display: none;
+  position: absolute;
+  top: 38px;
+  right: 8px;
+  background: #1c1c1e;
+  border: 0.5px solid var(--border-hover);
+  border-radius: 10px;
+  overflow: hidden;
+  z-index: 6;
+  min-width: 170px;
+}
+.tile-mod-menu.show { display: block; }
+.tile-mod-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px;
+  font-size: 13px;
+  font-family: var(--font-mono);
+  background: none;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+}
+.tile-mod-menu button:hover { background: var(--surface2); }
+.tile-mod-menu button.tm-expel { color: var(--danger); }
