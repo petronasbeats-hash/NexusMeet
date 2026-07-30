@@ -212,7 +212,16 @@ function connectSocket(roomId, nick, invite) {
   socket = io();
 
   socket.on('connect', () => {
-    socket.emit('join-room', { roomId, nick, invite });
+    const hostToken = sessionStorage.getItem(`nm-host-${roomId}`);
+    socket.emit('join-room', { roomId, nick, invite, hostToken });
+  });
+
+  socket.on('host-token', (token) => {
+    sessionStorage.setItem(`nm-host-${roomId}`, token);
+  });
+
+  socket.on('host-reclaimed', ({ nick: pNick }) => {
+    toast(`${pNick} recuperó el rol de host`);
   });
 
   socket.on('chat-message', ({ nick: fromNick, message, ts }) => {

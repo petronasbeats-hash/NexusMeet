@@ -71,12 +71,13 @@ io.on('connection', (socket) => {
   console.log(`[+] Conectado: ${socket.id}`);
 
   // Usuario pide unirse a una sala
-  socket.on('join-room', ({ roomId, nick, invite }) => {
+  socket.on('join-room', ({ roomId, nick, invite, hostToken }) => {
     socket.roomId = roomId;
     socket.nick = nick;
 
     // Sala nueva: quien la crea entra directo y es el host
     if (!rooms[roomId]) {
+      const hostToken = generateInviteToken();
       rooms[roomId] = {
         host: socket.id,
         peers: {},
@@ -84,12 +85,28 @@ io.on('connection', (socket) => {
         locked: false,
         inviteToken: generateInviteToken(),
         inviteExpires: Date.now() + INVITE_TTL_MS,
+        hostToken, // identifica al creador original, para que pueda reclamar el rol si vuelve
       };
       admitToRoom(io, rooms, socket, roomId, nick);
+      socket.emit('host-token', hostToken);
       return;
     }
 
     const room = rooms[roomId];
+
+    // Reclamo de host: si trae el token del creador original, recupera el rol
+    // sin pasar por sala de espera, bloqueo ni validación de invitación
+    if (hostToken && room.hostToken && hostToken === room.hostToken) {
+      const oldHostId = room.host;
+      room.host = socket.id;
+      if (oldHostId && oldHostId !== socket.id) {
+        io.to(oldHostId).emit('you-are-host', false);
+      }
+      admitToRoom(io, rooms, socket, roomId, nick);
+      socket.emit('host-token', room.hostToken);
+      io.to(roomId).emit('host-reclaimed', { nick });
+      return;
+    }
 
     // Sala bloqueada por el host: nadie más puede entrar aunque tenga el código
     if (room.locked) {
