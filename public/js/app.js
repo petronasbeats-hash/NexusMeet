@@ -584,6 +584,7 @@ function connectSocket(roomId, nick, invite) {
   // Peer se fue
   socket.on('peer-left', ({ socketId, nick: pNick }) => {
     cleanupPeer(socketId);
+    playLeaveSound();
   });
 }
 
@@ -1077,7 +1078,7 @@ function updateLockButton() {
   }
 }
 
-// ── Sonido de notificación ("alguien quiere entrar") ────────────────
+// ── Sonidos de notificación ("alguien entra" / "alguien sale") ─────
 // Se generan con Web Audio API (osciladores), no con archivos de audio,
 // para no depender de nada externo ni de derechos de autor.
 let notifAudioCtx = null;
@@ -1103,63 +1104,103 @@ function playPureTone(freq, duration = 0.35, type = 'sine', delay = 0) {
   osc.stop(t0 + duration + 0.05);
 }
 
-function playCampanilla() {
-  playPureTone(880, 0.18, 'sine', 0);
-  playPureTone(1318.5, 0.22, 'sine', 0.1);
-}
-
-function playEstelar() {
+function playSweep(freqFrom, freqTo, duration = 0.4) {
   const ctx = getNotifAudioCtx();
   const osc = ctx.createOscillator();
   const gain = ctx.createGain();
   osc.type = 'sine';
-  osc.frequency.setValueAtTime(420, ctx.currentTime);
-  osc.frequency.exponentialRampToValueAtTime(1600, ctx.currentTime + 0.35);
+  osc.frequency.setValueAtTime(freqFrom, ctx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(freqTo, ctx.currentTime + duration);
   gain.gain.setValueAtTime(0, ctx.currentTime);
   gain.gain.linearRampToValueAtTime(0.2, ctx.currentTime + 0.05);
-  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.42);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration + 0.05);
   osc.connect(gain).connect(ctx.destination);
   osc.start();
-  osc.stop(ctx.currentTime + 0.45);
+  osc.stop(ctx.currentTime + duration + 0.1);
 }
 
-function playBeepClasico() {
-  playPureTone(660, 0.15, 'square', 0);
+// Entrada
+function playCampanilla() {
+  playPureTone(880, 0.18, 'sine', 0);
+  playPureTone(1318.5, 0.22, 'sine', 0.1); // sube: 880 → 1318 Hz
 }
-
-function playFrecuenciaLibre() {
-  const freq = parseInt(localStorage.getItem('nm-notif-freq'), 10) || 528;
+function playEstelar() { playSweep(420, 1600, 0.35); } // barrido ascendente
+function playBeepClasico() { playPureTone(660, 0.15, 'square', 0); }
+function playFrecuenciaLibre(kind) {
+  const freq = parseInt(localStorage.getItem(`nm-notif-freq-${kind}`), 10) || (kind === 'leave' ? 396 : 528);
   playPureTone(freq, 0.4, 'sine', 0);
 }
 
-const NOTIF_SOUNDS = {
+// Salida (variantes descendentes / más suaves, para diferenciarse de la entrada)
+function playCampanillaSalida() {
+  playPureTone(1318.5, 0.18, 'sine', 0);
+  playPureTone(880, 0.22, 'sine', 0.1); // baja: 1318 → 880 Hz
+}
+function playEstelarSalida() { playSweep(1600, 420, 0.4); } // barrido descendente
+function playOmnipresente() {
+  // Sonido ambiental/envolvente: acorde suave con ataque y caída lentos
+  const ctx = getNotifAudioCtx();
+  const now = ctx.currentTime;
+  [220, 330, 440].forEach((freq) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.09, now + 0.4);
+    gain.gain.linearRampToValueAtTime(0, now + 1.4);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 1.5);
+  });
+}
+
+const NOTIF_SOUNDS_JOIN = {
   campanilla: playCampanilla,
   estelar: playEstelar,
   beep: playBeepClasico,
-  libre: playFrecuenciaLibre,
+  libre: () => playFrecuenciaLibre('join'),
 };
 
-function getSelectedNotifSound() {
-  return localStorage.getItem('nm-notif-sound') || 'campanilla';
+const NOTIF_SOUNDS_LEAVE = {
+  'campanilla-salida': playCampanillaSalida,
+  'estelar-salida': playEstelarSalida,
+  beep: playBeepClasico,
+  libre: () => playFrecuenciaLibre('leave'),
+  omnipresente: playOmnipresente,
+};
+
+function getSelectedNotifSound(kind) {
+  const def = kind === 'leave' ? 'campanilla-salida' : 'campanilla';
+  return localStorage.getItem(`nm-notif-sound-${kind}`) || def;
 }
 
 function playJoinSound() {
-  const fn = NOTIF_SOUNDS[getSelectedNotifSound()] || playCampanilla;
+  const fn = NOTIF_SOUNDS_JOIN[getSelectedNotifSound('join')] || playCampanilla;
+  try { fn(); } catch (e) { /* el navegador puede bloquear audio sin interacción previa */ }
+}
+
+function playLeaveSound() {
+  const fn = NOTIF_SOUNDS_LEAVE[getSelectedNotifSound('leave')] || playCampanillaSalida;
   try { fn(); } catch (e) { /* el navegador puede bloquear audio sin interacción previa */ }
 }
 
 function openSoundSettings() {
-  const current = getSelectedNotifSound();
-  document.querySelectorAll('input[name="sound-choice"]').forEach(r => {
-    r.checked = (r.value === current);
-  });
-  document.getElementById('sound-freq-input').value = localStorage.getItem('nm-notif-freq') || 528;
-  document.getElementById('sound-freq-row').style.display = (current === 'libre') ? 'flex' : 'none';
+  ['join', 'leave'].forEach(kind => {
+    const current = getSelectedNotifSound(kind);
+    document.querySelectorAll(`input[name="sound-choice-${kind}"]`).forEach(r => {
+      r.checked = (r.value === current);
+    });
+    const freqInput = document.getElementById(`sound-freq-input-${kind}`);
+    if (freqInput) freqInput.value = localStorage.getItem(`nm-notif-freq-${kind}`) || (kind === 'leave' ? 396 : 528);
+    const freqRow = document.getElementById(`sound-freq-row-${kind}`);
+    if (freqRow) freqRow.style.display = (current === 'libre') ? 'flex' : 'none';
 
-  document.querySelectorAll('input[name="sound-choice"]').forEach(r => {
-    r.onchange = () => {
-      document.getElementById('sound-freq-row').style.display = (r.value === 'libre') ? 'flex' : 'none';
-    };
+    document.querySelectorAll(`input[name="sound-choice-${kind}"]`).forEach(r => {
+      r.onchange = () => {
+        if (freqRow) freqRow.style.display = (r.value === 'libre') ? 'flex' : 'none';
+      };
+    });
   });
 
   document.getElementById('sound-editor').classList.add('show');
@@ -1169,27 +1210,32 @@ function closeSoundSettings() {
   document.getElementById('sound-editor').classList.remove('show');
 }
 
-function testSelectedSound() {
-  const choice = document.querySelector('input[name="sound-choice"]:checked');
-  const key = choice ? choice.value : getSelectedNotifSound();
+function testSound(kind) {
+  const checked = document.querySelector(`input[name="sound-choice-${kind}"]:checked`);
+  const key = checked ? checked.value : getSelectedNotifSound(kind);
   if (key === 'libre') {
-    const freq = parseInt(document.getElementById('sound-freq-input').value, 10) || 528;
+    const freqInput = document.getElementById(`sound-freq-input-${kind}`);
+    const freq = parseInt(freqInput ? freqInput.value : '', 10) || (kind === 'leave' ? 396 : 528);
     playPureTone(freq, 0.4, 'sine', 0);
   } else {
-    (NOTIF_SOUNDS[key] || playCampanilla)();
+    const table = kind === 'leave' ? NOTIF_SOUNDS_LEAVE : NOTIF_SOUNDS_JOIN;
+    (table[key] || playCampanilla)();
   }
 }
 
 function saveSoundSettings() {
-  const choice = document.querySelector('input[name="sound-choice"]:checked');
-  const key = choice ? choice.value : 'campanilla';
-  localStorage.setItem('nm-notif-sound', key);
-  if (key === 'libre') {
-    const freq = parseInt(document.getElementById('sound-freq-input').value, 10) || 528;
-    localStorage.setItem('nm-notif-freq', String(freq));
-  }
+  ['join', 'leave'].forEach(kind => {
+    const checked = document.querySelector(`input[name="sound-choice-${kind}"]:checked`);
+    const key = checked ? checked.value : (kind === 'leave' ? 'campanilla-salida' : 'campanilla');
+    localStorage.setItem(`nm-notif-sound-${kind}`, key);
+    if (key === 'libre') {
+      const freqInput = document.getElementById(`sound-freq-input-${kind}`);
+      const freq = parseInt(freqInput ? freqInput.value : '', 10) || (kind === 'leave' ? 396 : 528);
+      localStorage.setItem(`nm-notif-freq-${kind}`, String(freq));
+    }
+  });
   closeSoundSettings();
-  toast('Sonido de notificación guardado');
+  toast('Sonidos de notificación guardados');
 }
 
 function hangUp() {

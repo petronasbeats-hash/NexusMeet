@@ -110,37 +110,68 @@
       </div>
     </div>
 
-    <!-- Modal: elegir el sonido de notificación de "alguien quiere entrar" -->
+    <!-- Modal: elegir los sonidos de notificación de entrada y salida -->
     <div id="sound-editor" class="rules-editor">
-      <div class="rules-editor-box">
-        <p class="waiting-rules-label">Sonido cuando alguien pide entrar</p>
+      <div class="rules-editor-box sound-editor-box">
+        <p class="waiting-rules-label">Sonidos de notificación</p>
 
+        <p class="sound-section-title">Cuando alguien pide entrar</p>
         <div class="sound-options">
           <label class="sound-option">
-            <input type="radio" name="sound-choice" value="campanilla">
+            <input type="radio" name="sound-choice-join" value="campanilla">
             Campanilla
           </label>
           <label class="sound-option">
-            <input type="radio" name="sound-choice" value="estelar">
+            <input type="radio" name="sound-choice-join" value="estelar">
             Estelar (sci-fi)
           </label>
           <label class="sound-option">
-            <input type="radio" name="sound-choice" value="beep">
+            <input type="radio" name="sound-choice-join" value="beep">
             Beep clásico
           </label>
           <label class="sound-option">
-            <input type="radio" name="sound-choice" value="libre">
+            <input type="radio" name="sound-choice-join" value="libre">
             Frecuencia libre (Hz personalizado)
           </label>
         </div>
-
-        <div id="sound-freq-row" class="sound-freq-row" style="display:none">
-          <input type="number" id="sound-freq-input" min="100" max="4000" value="528">
+        <div id="sound-freq-row-join" class="sound-freq-row" style="display:none">
+          <input type="number" id="sound-freq-input-join" min="100" max="4000" value="528">
           <span>Hz</span>
         </div>
+        <button class="btn-ghost sound-test-btn" onclick="testSound('join')">▶ Probar entrada</button>
+
+        <hr class="sound-divider">
+
+        <p class="sound-section-title">Cuando alguien sale de la sala</p>
+        <div class="sound-options">
+          <label class="sound-option">
+            <input type="radio" name="sound-choice-leave" value="campanilla-salida">
+            Campanilla (descendente)
+          </label>
+          <label class="sound-option">
+            <input type="radio" name="sound-choice-leave" value="estelar-salida">
+            Estelar de salida
+          </label>
+          <label class="sound-option">
+            <input type="radio" name="sound-choice-leave" value="beep">
+            Beep clásico
+          </label>
+          <label class="sound-option">
+            <input type="radio" name="sound-choice-leave" value="libre">
+            Frecuencia libre de salida (Hz)
+          </label>
+          <label class="sound-option">
+            <input type="radio" name="sound-choice-leave" value="omnipresente">
+            Sonido omnipresente (ambiental)
+          </label>
+        </div>
+        <div id="sound-freq-row-leave" class="sound-freq-row" style="display:none">
+          <input type="number" id="sound-freq-input-leave" min="100" max="4000" value="396">
+          <span>Hz</span>
+        </div>
+        <button class="btn-ghost sound-test-btn" onclick="testSound('leave')">▶ Probar salida</button>
 
         <div class="rules-editor-actions">
-          <button class="btn-ghost" onclick="testSelectedSound()">▶ Probar</button>
           <button class="btn-ghost" onclick="closeSoundSettings()">Cancelar</button>
           <button class="btn btn-secondary" onclick="saveSoundSettings()">Guardar</button>
         </div>
