@@ -879,3 +879,10 @@ input::placeholder { color: var(--text-dim); }
   margin-top: 8px;
   font-size: 12px;
 }
+
+.sound-single-note {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text);
+  margin: 6px 0;
+}

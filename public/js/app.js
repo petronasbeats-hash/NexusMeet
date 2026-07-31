@@ -1156,10 +1156,7 @@ function playOmnipresente() {
 }
 
 const NOTIF_SOUNDS_JOIN = {
-  campanilla: playCampanilla,
-  estelar: playEstelar,
-  beep: playBeepClasico,
-  libre: () => playFrecuenciaLibre('join'),
+  omnipresente: playOmnipresente,
 };
 
 const NOTIF_SOUNDS_LEAVE = {
@@ -1171,12 +1168,12 @@ const NOTIF_SOUNDS_LEAVE = {
 };
 
 function getSelectedNotifSound(kind) {
-  const def = kind === 'leave' ? 'campanilla-salida' : 'campanilla';
+  const def = kind === 'leave' ? 'campanilla-salida' : 'omnipresente';
   return localStorage.getItem(`nm-notif-sound-${kind}`) || def;
 }
 
 function playJoinSound() {
-  const fn = NOTIF_SOUNDS_JOIN[getSelectedNotifSound('join')] || playCampanilla;
+  const fn = NOTIF_SOUNDS_JOIN[getSelectedNotifSound('join')] || playOmnipresente;
   try { fn(); } catch (e) { /* el navegador puede bloquear audio sin interacción previa */ }
 }
 
@@ -1226,7 +1223,7 @@ function testSound(kind) {
 function saveSoundSettings() {
   ['join', 'leave'].forEach(kind => {
     const checked = document.querySelector(`input[name="sound-choice-${kind}"]:checked`);
-    const key = checked ? checked.value : (kind === 'leave' ? 'campanilla-salida' : 'campanilla');
+    const key = checked ? checked.value : (kind === 'leave' ? 'campanilla-salida' : 'omnipresente');
     localStorage.setItem(`nm-notif-sound-${kind}`, key);
     if (key === 'libre') {
       const freqInput = document.getElementById(`sound-freq-input-${kind}`);
