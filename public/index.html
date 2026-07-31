@@ -60,6 +60,7 @@
         <button class="btn-ghost" id="rules-btn" onclick="openRulesEditor()" style="display:none">Reglas</button>
         <button class="btn-ghost" id="lock-btn" onclick="toggleLock()" style="display:none">Bloquear sala</button>
         <button class="btn-ghost" id="gallery-btn" onclick="unpinAll()" style="display:none">🔲 Ver galería</button>
+        <button class="btn-ghost" onclick="openSoundSettings()" title="Sonido de notificación">🔔</button>
         <button class="btn-ghost" onclick="copyInvite()" id="copy-btn">Copiar enlace ↗</button>
       </div>
     </header>
@@ -105,6 +106,43 @@
         <div class="rules-editor-actions">
           <button class="btn-ghost" onclick="closeRulesEditor()">Cancelar</button>
           <button class="btn btn-secondary" onclick="saveRoomRules()">Guardar</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: elegir el sonido de notificación de "alguien quiere entrar" -->
+    <div id="sound-editor" class="rules-editor">
+      <div class="rules-editor-box">
+        <p class="waiting-rules-label">Sonido cuando alguien pide entrar</p>
+
+        <div class="sound-options">
+          <label class="sound-option">
+            <input type="radio" name="sound-choice" value="campanilla">
+            Campanilla
+          </label>
+          <label class="sound-option">
+            <input type="radio" name="sound-choice" value="estelar">
+            Estelar (sci-fi)
+          </label>
+          <label class="sound-option">
+            <input type="radio" name="sound-choice" value="beep">
+            Beep clásico
+          </label>
+          <label class="sound-option">
+            <input type="radio" name="sound-choice" value="libre">
+            Frecuencia libre (Hz personalizado)
+          </label>
+        </div>
+
+        <div id="sound-freq-row" class="sound-freq-row" style="display:none">
+          <input type="number" id="sound-freq-input" min="100" max="4000" value="528">
+          <span>Hz</span>
+        </div>
+
+        <div class="rules-editor-actions">
+          <button class="btn-ghost" onclick="testSelectedSound()">▶ Probar</button>
+          <button class="btn-ghost" onclick="closeSoundSettings()">Cancelar</button>
+          <button class="btn btn-secondary" onclick="saveSoundSettings()">Guardar</button>
         </div>
       </div>
     </div>

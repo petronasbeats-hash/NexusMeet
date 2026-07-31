@@ -463,6 +463,7 @@ function connectSocket(roomId, nick, invite) {
 
   socket.on('join-request', ({ nick: pNick, socketId }) => {
     addJoinRequest(pNick, socketId);
+    playJoinSound();
   });
 
   // ── Reglas de la sala ─────────────────────────────────────────────
@@ -1074,6 +1075,121 @@ function updateLockButton() {
     videosContainer.classList.toggle('host-mode', isHost);
     videosContainer.classList.toggle('mod-mode', isHost || isCoHost);
   }
+}
+
+// ── Sonido de notificación ("alguien quiere entrar") ────────────────
+// Se generan con Web Audio API (osciladores), no con archivos de audio,
+// para no depender de nada externo ni de derechos de autor.
+let notifAudioCtx = null;
+
+function getNotifAudioCtx() {
+  notifAudioCtx = notifAudioCtx || new (window.AudioContext || window.webkitAudioContext)();
+  if (notifAudioCtx.state === 'suspended') notifAudioCtx.resume();
+  return notifAudioCtx;
+}
+
+function playPureTone(freq, duration = 0.35, type = 'sine', delay = 0) {
+  const ctx = getNotifAudioCtx();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  const t0 = ctx.currentTime + delay;
+  gain.gain.setValueAtTime(0, t0);
+  gain.gain.linearRampToValueAtTime(0.22, t0 + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(t0);
+  osc.stop(t0 + duration + 0.05);
+}
+
+function playCampanilla() {
+  playPureTone(880, 0.18, 'sine', 0);
+  playPureTone(1318.5, 0.22, 'sine', 0.1);
+}
+
+function playEstelar() {
+  const ctx = getNotifAudioCtx();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(420, ctx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(1600, ctx.currentTime + 0.35);
+  gain.gain.setValueAtTime(0, ctx.currentTime);
+  gain.gain.linearRampToValueAtTime(0.2, ctx.currentTime + 0.05);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.42);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start();
+  osc.stop(ctx.currentTime + 0.45);
+}
+
+function playBeepClasico() {
+  playPureTone(660, 0.15, 'square', 0);
+}
+
+function playFrecuenciaLibre() {
+  const freq = parseInt(localStorage.getItem('nm-notif-freq'), 10) || 528;
+  playPureTone(freq, 0.4, 'sine', 0);
+}
+
+const NOTIF_SOUNDS = {
+  campanilla: playCampanilla,
+  estelar: playEstelar,
+  beep: playBeepClasico,
+  libre: playFrecuenciaLibre,
+};
+
+function getSelectedNotifSound() {
+  return localStorage.getItem('nm-notif-sound') || 'campanilla';
+}
+
+function playJoinSound() {
+  const fn = NOTIF_SOUNDS[getSelectedNotifSound()] || playCampanilla;
+  try { fn(); } catch (e) { /* el navegador puede bloquear audio sin interacción previa */ }
+}
+
+function openSoundSettings() {
+  const current = getSelectedNotifSound();
+  document.querySelectorAll('input[name="sound-choice"]').forEach(r => {
+    r.checked = (r.value === current);
+  });
+  document.getElementById('sound-freq-input').value = localStorage.getItem('nm-notif-freq') || 528;
+  document.getElementById('sound-freq-row').style.display = (current === 'libre') ? 'flex' : 'none';
+
+  document.querySelectorAll('input[name="sound-choice"]').forEach(r => {
+    r.onchange = () => {
+      document.getElementById('sound-freq-row').style.display = (r.value === 'libre') ? 'flex' : 'none';
+    };
+  });
+
+  document.getElementById('sound-editor').classList.add('show');
+}
+
+function closeSoundSettings() {
+  document.getElementById('sound-editor').classList.remove('show');
+}
+
+function testSelectedSound() {
+  const choice = document.querySelector('input[name="sound-choice"]:checked');
+  const key = choice ? choice.value : getSelectedNotifSound();
+  if (key === 'libre') {
+    const freq = parseInt(document.getElementById('sound-freq-input').value, 10) || 528;
+    playPureTone(freq, 0.4, 'sine', 0);
+  } else {
+    (NOTIF_SOUNDS[key] || playCampanilla)();
+  }
+}
+
+function saveSoundSettings() {
+  const choice = document.querySelector('input[name="sound-choice"]:checked');
+  const key = choice ? choice.value : 'campanilla';
+  localStorage.setItem('nm-notif-sound', key);
+  if (key === 'libre') {
+    const freq = parseInt(document.getElementById('sound-freq-input').value, 10) || 528;
+    localStorage.setItem('nm-notif-freq', String(freq));
+  }
+  closeSoundSettings();
+  toast('Sonido de notificación guardado');
 }
 
 function hangUp() {

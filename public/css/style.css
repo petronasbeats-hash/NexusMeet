@@ -824,3 +824,36 @@ input::placeholder { color: var(--text-dim); }
   z-index: 2;
   pointer-events: none;
 }
+
+/* ── Selector de sonido de notificación ──────────────────────────── */
+.sound-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12px 0;
+}
+.sound-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+.sound-freq-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.sound-freq-row input {
+  width: 90px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 0.5px solid var(--border-hover);
+  background: var(--surface2, #1c1c1e);
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+.sound-freq-row span { font-family: var(--font-mono); font-size: 13px; color: var(--text-muted); }
