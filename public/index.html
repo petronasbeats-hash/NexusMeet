@@ -39,10 +39,63 @@
         <div class="sep"><span>o</span></div>
 
         <div class="input-group">
-          <label>Código de sala</label>
-          <input id="join-input" type="text" placeholder="ABC123" maxlength="8" autocomplete="off" style="text-transform:uppercase;letter-spacing:4px;font-size:18px">
+          <label>Código de sala o enlace de invitación</label>
+          <input id="join-input" type="text" placeholder="ABC123 o pega el enlace" maxlength="300" autocomplete="off" oninput="this.classList.toggle('long', this.value.length > 8)">
+          <p class="join-hint">Para entrar a una sala necesitas el <b>enlace de invitación</b> que te manda el host (dura 4 horas). Puedes pegarlo aquí tal cual.</p>
         </div>
         <button class="btn btn-secondary" onclick="joinRoom()">Unirse →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- PRE-ENTRADA: vista previa y selector de dispositivos -->
+  <div id="prejoin-screen" class="screen">
+    <div class="lobby-bg">
+      <div class="blob b1"></div>
+      <div class="blob b2"></div>
+      <div class="grid-overlay"></div>
+    </div>
+    <div class="lobby-content">
+      <div class="logo">
+        <span class="logo-icon">◈</span>
+        <span class="logo-text">Nexus Meet</span>
+      </div>
+
+      <div class="form-card">
+        <p class="prejoin-title">Prepárate para entrar</p>
+        <p class="prejoin-room" id="prejoin-room-label">—</p>
+
+        <div class="prejoin-preview">
+          <video id="prejoin-video" autoplay muted playsinline></video>
+          <div class="prejoin-nocam" id="prejoin-nocam">Cámara apagada</div>
+        </div>
+
+        <div class="prejoin-toggles">
+          <button class="btn-ghost" id="prejoin-mic-btn" onclick="togglePrejoinMic()">🎤 Micrófono: activo</button>
+          <button class="btn-ghost" id="prejoin-cam-btn" onclick="togglePrejoinCam()">📷 Cámara: activa</button>
+        </div>
+
+        <div class="input-group">
+          <label>Micrófono</label>
+          <select id="prejoin-mic-select" onchange="onPrejoinMicChange(this.value)"></select>
+          <div class="mic-meter" title="Habla para probar tu micrófono"><div id="prejoin-meter-bar"></div></div>
+        </div>
+
+        <div class="input-group">
+          <label>Cámara</label>
+          <select id="prejoin-cam-select" onchange="onPrejoinCamChange(this.value)"></select>
+        </div>
+
+        <div class="input-group" id="prejoin-speaker-group">
+          <label>Bocina</label>
+          <div class="speaker-row">
+            <select id="prejoin-speaker-select" onchange="onPrejoinSpeakerChange(this.value)"></select>
+            <button class="btn-ghost" onclick="testSpeaker()">Probar</button>
+          </div>
+        </div>
+
+        <button class="btn btn-primary" id="prejoin-enter-btn" onclick="confirmPrejoin()">Entrar →</button>
+        <button class="btn-ghost" onclick="cancelPrejoin()">← Volver</button>
       </div>
     </div>
   </div>
