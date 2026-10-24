@@ -25,9 +25,9 @@ html, body {
   overflow: hidden;
 }
 
-#app { height: 100vh; position: relative; }
+#app { height: 100vh; height: 100dvh; position: relative; }
 
-.screen { display: none; height: 100vh; }
+.screen { display: none; height: 100vh; height: 100dvh; }
 .screen.active { display: flex; flex-direction: column; }
 
 /* ── LOBBY ── */
@@ -936,3 +936,62 @@ select:disabled { opacity: 0.5; }
 .join-hint { font-size: 12px; color: var(--text-muted); line-height: 1.5; font-family: var(--font-display); }
 #join-input { text-transform: uppercase; letter-spacing: 4px; font-size: 18px; }
 #join-input.long { letter-spacing: 0; font-size: 13px; text-transform: none; }
+
+
+/* ═══ BOTONES MÁS GRANDES Y RESPONSIVOS ═══ */
+
+/* Escritorio: controles y encabezado más legibles */
+.controls { gap: 14px; flex-wrap: wrap; }
+.ctrl-btn { min-width: 84px; padding: 16px 22px; gap: 7px; }
+.ctrl-btn svg { width: 26px; height: 26px; }
+.ctrl-label { font-size: 12px; }
+.ctrl-hang { padding: 18px 32px; }
+.room-id { font-size: 16px; }
+.room-meta { gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.room-meta .btn-ghost { font-size: 13px; padding: 9px 14px; }
+.badge { font-size: 12px; padding: 6px 12px; }
+.tile-pin-btn, .tile-fullscreen-btn { width: 32px; height: 32px; font-size: 15px; }
+.tile-fullscreen-btn { right: 46px; }
+.tile-mod-btn { width: 32px; height: 32px; }
+
+/* Pantallas táctiles: sin "hover", así que los botones de cada video siempre se ven y son fáciles de tocar */
+@media (hover: none) {
+  .tile-pin-btn, .tile-fullscreen-btn { display: flex; width: 40px; height: 40px; font-size: 17px; }
+  .tile-pin-btn { right: 8px; }
+  .tile-fullscreen-btn { right: 54px; }
+  .tile-mod-btn { width: 40px; height: 40px; font-size: 20px; }
+  .btn-ghost { min-height: 44px; }
+}
+
+/* Celular */
+@media (max-width: 700px) {
+  input, select, textarea { font-size: 16px; } /* evita el zoom automático de iPhone */
+  .btn, .btn-ghost { min-height: 48px; font-size: 15px; }
+
+  .room-header { padding: 10px 12px; gap: 8px; flex-wrap: wrap; }
+  .room-header .room-meta { width: 100%; justify-content: flex-start; }
+  .room-meta .btn-ghost { min-height: 42px; font-size: 13px; padding: 8px 12px; }
+
+  /* Barra de controles: cuadrícula de botones grandes, 4 por fila */
+  .controls {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    padding: 10px 10px calc(14px + env(safe-area-inset-bottom, 0px));
+  }
+  .ctrl-btn {
+    min-width: 0;
+    width: 100%;
+    min-height: 66px;
+    padding: 10px 4px;
+    gap: 5px;
+    border-radius: 14px;
+    justify-content: center;
+  }
+  .ctrl-btn svg { width: 26px; height: 26px; }
+  .ctrl-label { font-size: 11px; text-align: center; line-height: 1.15; }
+  .ctrl-hang { padding: 10px 4px; }
+
+  .prejoin-toggles .btn-ghost { flex-basis: 100%; }
+  .lobby-content { padding: 1.5rem 1rem; }
+}
