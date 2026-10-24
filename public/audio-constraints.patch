@@ -1,0 +1,23 @@
+diff --git a/public/js/app.js b/public/js/app.js
+index 69a471f..163d215 100644
+--- a/public/js/app.js
++++ b/public/js/app.js
+@@ -85,10 +85,16 @@ function updatePeersBadge() {
+ // ── Media ───────────────────────────────────────────────────────
+ async function getMedia() {
+   try {
+-    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
++    localStream = await navigator.mediaDevices.getUserMedia({
++      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
++      video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 24, max: 30 } }
++    });
+   } catch (e) {
+     try {
+-      localStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
++      localStream = await navigator.mediaDevices.getUserMedia({
++        video: false,
++        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
++      });
+       camOn = false;
+     } catch (e2) {
+       localStream = new MediaStream();
