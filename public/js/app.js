@@ -58,6 +58,14 @@ const peerConnections = {};
 // peerNicks: { socketId: nick }
 const peerNicks = {};
 
+// ── Reconexión automática ───────────────────────────────────────
+const MAX_RECONNECT_ATTEMPTS = 4;
+const peerPolite = {};          // true = cede si ambos mandan offer a la vez
+const makingOffer = {};         // true mientras creamos/enviamos un offer
+const reconnectAttempts = {};   // intentos de ICE restart por peer
+const reconnectTimers = {};     // timers de espera/verificación por peer
+const pendingCandidates = {};   // candidates que llegaron antes del remoteDescription
+
 // ── Utilidades ─────────────────────────────────────────────────
 function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -345,7 +353,23 @@ function createPeerConnection(socketId, nick) {
   };
 
   pc.onconnectionstatechange = () => {
-    if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
+    const state = pc.connectionState;
+    if (state === 'connected') {
+      // Se recuperó (o conectó por primera vez): limpiar intentos
+      clearTimeout(reconnectTimers[socketId]);
+      if (reconnectAttempts[socketId]) {
+        toast(`Conexión con ${peerNicks[socketId] || 'el participante'} restablecida`);
+        setStatus(`En llamada con: ${Object.values(peerNicks).join(', ')}`);
+      }
+      reconnectAttempts[socketId] = 0;
+    } else if (state === 'disconnected') {
+      // Suele recuperarse solo en unos segundos; si no, reiniciamos ICE
+      clearTimeout(reconnectTimers[socketId]);
+      reconnectTimers[socketId] = setTimeout(() => tryIceRestart(socketId), 3000);
+    } else if (state === 'failed') {
+      clearTimeout(reconnectTimers[socketId]);
+      tryIceRestart(socketId);
+    } else if (state === 'closed') {
       cleanupPeer(socketId);
     }
   };
@@ -354,7 +378,77 @@ function createPeerConnection(socketId, nick) {
   return pc;
 }
 
+// Reinicia ICE y renegocia sin tirar la llamada. Reintenta con espera creciente.
+async function tryIceRestart(socketId) {
+  const pc = peerConnections[socketId];
+  if (!pc || pc.signalingState === 'closed') return;
+  if (pc.connectionState === 'connected') return;
+
+  const attempt = (reconnectAttempts[socketId] || 0) + 1;
+  reconnectAttempts[socketId] = attempt;
+
+  if (attempt > MAX_RECONNECT_ATTEMPTS) {
+    // Ya no hay nada más que intentar: soltar al peer
+    cleanupPeer(socketId);
+    return;
+  }
+
+  const nick = peerNicks[socketId] || 'el participante';
+  setStatus(`Reconectando con ${nick}... (${attempt}/${MAX_RECONNECT_ATTEMPTS})`);
+  if (attempt === 1) toast(`Reconectando con ${nick}...`);
+
+  // Si el signaling (socket) también está caído, esperar a que vuelva
+  if (socket && socket.connected) {
+    try {
+      makingOffer[socketId] = true;
+      pc.restartIce();
+      const offer = await pc.createOffer({ iceRestart: true });
+      if (pc.signalingState === 'stable') {
+        await pc.setLocalDescription(offer);
+        socket.emit('offer', { to: socketId, offer });
+      }
+    } catch (e) {
+      console.warn('ICE restart falló:', e);
+    } finally {
+      makingOffer[socketId] = false;
+    }
+  }
+
+  // Verificar más tarde; si no se recuperó, siguiente intento
+  clearTimeout(reconnectTimers[socketId]);
+  reconnectTimers[socketId] = setTimeout(() => tryIceRestart(socketId), 4000 + attempt * 2000);
+}
+
+// Al volver el internet, reintentar ya sin esperar los timers
+window.addEventListener('online', () => {
+  Object.keys(peerConnections).forEach(id => {
+    const pc = peerConnections[id];
+    if (pc && pc.connectionState !== 'connected') {
+      clearTimeout(reconnectTimers[id]);
+      reconnectAttempts[id] = 0;
+      tryIceRestart(id);
+    }
+  });
+});
+
+// Aplica candidates que llegaron antes de tener remoteDescription
+async function flushPendingCandidates(socketId) {
+  const pc = peerConnections[socketId];
+  const queue = pendingCandidates[socketId];
+  if (!pc || !queue) return;
+  delete pendingCandidates[socketId];
+  for (const c of queue) {
+    try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch {}
+  }
+}
+
 function cleanupPeer(socketId) {
+  clearTimeout(reconnectTimers[socketId]);
+  delete reconnectTimers[socketId];
+  delete reconnectAttempts[socketId];
+  delete makingOffer[socketId];
+  delete peerPolite[socketId];
+  delete pendingCandidates[socketId];
   if (peerConnections[socketId]) {
     peerConnections[socketId].close();
     delete peerConnections[socketId];
@@ -551,9 +645,15 @@ function connectSocket(roomId, nick, invite) {
     document.getElementById('waiting-overlay').classList.remove('show');
     for (const peer of peers) {
       const pc = createPeerConnection(peer.socketId, peer.nick);
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      socket.emit('offer', { to: peer.socketId, offer });
+      peerPolite[peer.socketId] = false; // nosotros iniciamos: no cedemos en colisiones
+      makingOffer[peer.socketId] = true;
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit('offer', { to: peer.socketId, offer });
+      } finally {
+        makingOffer[peer.socketId] = false;
+      }
     }
     reportPeerState();
   });
@@ -565,26 +665,52 @@ function connectSocket(roomId, nick, invite) {
   });
 
   // Recibimos offer de alguien → respondemos
+  // Puede ser un offer nuevo o una renegociación (ICE restart) de una conexión existente
   socket.on('offer', async ({ from, nick: pNick, offer }) => {
-    const pc = createPeerConnection(from, pNick);
-    await pc.setRemoteDescription(new RTCSessionDescription(offer));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    socket.emit('answer', { to: from, answer });
+    let pc = peerConnections[from];
+    if (!pc) {
+      pc = createPeerConnection(from, pNick);
+      peerPolite[from] = true; // quien responde es el "educado" en colisiones
+    }
+
+    // Colisión: ambos mandaron offer al mismo tiempo
+    const collision = makingOffer[from] || pc.signalingState !== 'stable';
+    if (collision && !peerPolite[from]) return; // el impolite ignora el offer ajeno
+
+    try {
+      if (collision) await pc.setLocalDescription({ type: 'rollback' });
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      await flushPendingCandidates(from);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      socket.emit('answer', { to: from, answer });
+    } catch (e) {
+      console.warn('Error al procesar offer:', e);
+    }
   });
 
   // Recibimos answer
   socket.on('answer', async ({ from, answer }) => {
     const pc = peerConnections[from];
-    if (pc) await pc.setRemoteDescription(new RTCSessionDescription(answer));
+    if (!pc || pc.signalingState !== 'have-local-offer') return;
+    try {
+      await pc.setRemoteDescription(new RTCSessionDescription(answer));
+      await flushPendingCandidates(from);
+    } catch (e) {
+      console.warn('Error al procesar answer:', e);
+    }
   });
 
   // ICE candidate remoto
   socket.on('ice-candidate', async ({ from, candidate }) => {
     const pc = peerConnections[from];
-    if (pc && candidate) {
-      try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch {}
+    if (!pc || !candidate) return;
+    if (!pc.remoteDescription) {
+      // Aún no hay remoteDescription: guardar para aplicarlo después
+      (pendingCandidates[from] = pendingCandidates[from] || []).push(candidate);
+      return;
     }
+    try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch {}
   });
 
   // Peer se fue
