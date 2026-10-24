@@ -92,26 +92,233 @@ function updatePeersBadge() {
 
 // ── Media ───────────────────────────────────────────────────────
 async function getMedia() {
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 24, max: 30 } }
-    });
-  } catch (e) {
-    try {
-      localStream = await navigator.mediaDevices.getUserMedia({
-        video: false,
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-      });
-      camOn = false;
-    } catch (e2) {
-      localStream = new MediaStream();
-      camOn = false;
-      micOn = false;
-    }
+  if (prejoinStream) {
+    // Usar la vista previa que ya eligió el usuario (mismos dispositivos y estados)
+    localStream = prejoinStream;
+    prejoinStream = null;
+    stopPrejoinMeter();
+    micOn = localStream.getAudioTracks().length > 0 && prejoinMicOn;
+    camOn = localStream.getVideoTracks().length > 0 && prejoinCamOn;
+    localStream.getAudioTracks().forEach(t => t.enabled = micOn);
+    localStream.getVideoTracks().forEach(t => t.enabled = camOn);
+  } else {
+    localStream = await acquireStream();
+    if (!localStream.getVideoTracks().length) camOn = false;
+    if (!localStream.getAudioTracks().length) micOn = false;
   }
   cameraVideoTrack = localStream.getVideoTracks()[0] || null;
   return localStream;
+}
+
+// ── Pre-entrada: vista previa y selector de dispositivos ────────
+let pendingJoin = null;       // { nick, roomId, invite, isNew }
+let prejoinStream = null;
+let prejoinMeter = null;
+let prejoinMicOn = true;
+let prejoinCamOn = true;
+let prejoinBusy = false;
+let selectedMicId = '';
+let selectedCamId = '';
+let selectedSpeakerId = '';
+let joinedWithInvite = false;
+
+function buildMediaConstraints() {
+  const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+  if (selectedMicId) audio.deviceId = { exact: selectedMicId };
+  const video = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 24, max: 30 } };
+  if (selectedCamId) video.deviceId = { exact: selectedCamId };
+  return { audio, video };
+}
+
+// audio+video → (si el dispositivo elegido ya no existe, vuelve al predeterminado) → solo audio → vacío
+async function acquireStream() {
+  const gum = (c) => navigator.mediaDevices.getUserMedia(c);
+  const tryBoth = async () => {
+    try { return await gum(buildMediaConstraints()); } catch { return null; }
+  };
+  let stream = await tryBoth();
+  if (!stream && (selectedMicId || selectedCamId)) {
+    selectedMicId = '';
+    selectedCamId = '';
+    stream = await tryBoth();
+  }
+  if (!stream) {
+    try { stream = await gum({ audio: buildMediaConstraints().audio, video: false }); } catch {}
+  }
+  return stream || new MediaStream();
+}
+
+async function openPrejoin(nick, roomId, invite, isNew) {
+  pendingJoin = { nick, roomId, invite, isNew };
+  prejoinMicOn = true;
+  prejoinCamOn = true;
+  document.getElementById('prejoin-room-label').textContent =
+    isNew ? `SALA NUEVA · ${roomId}` : `SALA ${roomId}`;
+  const speakerGroup = document.getElementById('prejoin-speaker-group');
+  speakerGroup.style.display = ('setSinkId' in HTMLMediaElement.prototype) ? '' : 'none';
+  showScreen('prejoin-screen');
+  await startPrejoinPreview();
+}
+
+async function startPrejoinPreview() {
+  prejoinBusy = true;
+  const enterBtn = document.getElementById('prejoin-enter-btn');
+  enterBtn.disabled = true;
+  stopPrejoinStream();
+  const stream = await acquireStream();
+  if (!pendingJoin) { // el usuario canceló mientras se pedía el permiso
+    stream.getTracks().forEach(t => t.stop());
+    prejoinBusy = false;
+    return;
+  }
+  prejoinStream = stream;
+  document.getElementById('prejoin-video').srcObject = stream;
+  applyPrejoinToggles();
+  startPrejoinMeter();
+  await populateDeviceLists();
+  prejoinBusy = false;
+  enterBtn.disabled = false;
+}
+
+function stopPrejoinStream() {
+  stopPrejoinMeter();
+  if (prejoinStream) prejoinStream.getTracks().forEach(t => t.stop());
+  prejoinStream = null;
+  const v = document.getElementById('prejoin-video');
+  if (v) v.srcObject = null;
+}
+
+function applyPrejoinToggles() {
+  const hasAudio = !!(prejoinStream && prejoinStream.getAudioTracks().length);
+  const hasVideo = !!(prejoinStream && prejoinStream.getVideoTracks().length);
+  if (prejoinStream) {
+    prejoinStream.getAudioTracks().forEach(t => t.enabled = prejoinMicOn);
+    prejoinStream.getVideoTracks().forEach(t => t.enabled = prejoinCamOn);
+  }
+  const micBtn = document.getElementById('prejoin-mic-btn');
+  const camBtn = document.getElementById('prejoin-cam-btn');
+  micBtn.classList.toggle('off', !hasAudio || !prejoinMicOn);
+  camBtn.classList.toggle('off', !hasVideo || !prejoinCamOn);
+  micBtn.textContent = !hasAudio ? '🎤 Sin micrófono' : (prejoinMicOn ? '🎤 Micrófono: activo' : '🎤 Micrófono: apagado');
+  camBtn.textContent = !hasVideo ? '📷 Sin cámara' : (prejoinCamOn ? '📷 Cámara: activa' : '📷 Cámara: apagada');
+  const preview = document.querySelector('.prejoin-preview');
+  preview.classList.toggle('no-cam', !hasVideo || !prejoinCamOn);
+  document.getElementById('prejoin-nocam').textContent = hasVideo ? 'Cámara apagada' : 'No se detectó cámara';
+}
+
+function togglePrejoinMic() { prejoinMicOn = !prejoinMicOn; applyPrejoinToggles(); }
+function togglePrejoinCam() { prejoinCamOn = !prejoinCamOn; applyPrejoinToggles(); }
+
+function startPrejoinMeter() {
+  stopPrejoinMeter();
+  const bar = document.getElementById('prejoin-meter-bar');
+  const track = prejoinStream && prejoinStream.getAudioTracks()[0];
+  if (!track) { bar.style.width = '0%'; return; }
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  const ctx = new Ctx();
+  if (ctx.state === 'suspended') ctx.resume();
+  const source = ctx.createMediaStreamSource(new MediaStream([track]));
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 512;
+  source.connect(analyser);
+  const data = new Uint8Array(analyser.fftSize);
+  prejoinMeter = { ctx, raf: 0 };
+  const tick = () => {
+    analyser.getByteTimeDomainData(data);
+    let sum = 0;
+    for (let i = 0; i < data.length; i++) {
+      const v = (data[i] - 128) / 128;
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / data.length);
+    bar.style.width = (prejoinMicOn ? Math.min(100, Math.round(rms * 300)) : 0) + '%';
+    if (prejoinMeter) prejoinMeter.raf = requestAnimationFrame(tick);
+  };
+  tick();
+}
+
+function stopPrejoinMeter() {
+  if (!prejoinMeter) return;
+  cancelAnimationFrame(prejoinMeter.raf);
+  try { prejoinMeter.ctx.close(); } catch {}
+  prejoinMeter = null;
+  const bar = document.getElementById('prejoin-meter-bar');
+  if (bar) bar.style.width = '0%';
+}
+
+async function populateDeviceLists() {
+  let devices = [];
+  try { devices = await navigator.mediaDevices.enumerateDevices(); } catch {}
+  const audioTrack = prejoinStream && prejoinStream.getAudioTracks()[0];
+  const videoTrack = prejoinStream && prejoinStream.getVideoTracks()[0];
+  const activeMic = audioTrack && audioTrack.getSettings().deviceId;
+  const activeCam = videoTrack && videoTrack.getSettings().deviceId;
+
+  const fill = (selectId, kind, label, current) => {
+    const sel = document.getElementById(selectId);
+    const list = devices.filter(d => d.kind === kind);
+    sel.innerHTML = '';
+    if (!list.length) {
+      sel.add(new Option(`Sin ${label}`, ''));
+      sel.disabled = true;
+      return;
+    }
+    sel.disabled = false;
+    list.forEach((d, i) => sel.add(new Option(d.label || `${label} ${i + 1}`, d.deviceId)));
+    if (current && list.some(d => d.deviceId === current)) sel.value = current;
+  };
+  fill('prejoin-mic-select', 'audioinput', 'micrófono', activeMic);
+  fill('prejoin-cam-select', 'videoinput', 'cámara', activeCam);
+  fill('prejoin-speaker-select', 'audiooutput', 'bocina', selectedSpeakerId);
+}
+
+function onPrejoinMicChange(id) { selectedMicId = id; startPrejoinPreview(); }
+function onPrejoinCamChange(id) { selectedCamId = id; startPrejoinPreview(); }
+function onPrejoinSpeakerChange(id) { selectedSpeakerId = id; testSpeaker(); }
+
+// Tono corto por la bocina elegida
+async function testSpeaker() {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  const ctx = new Ctx();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  const dest = ctx.createMediaStreamDestination();
+  osc.frequency.value = 660;
+  gain.gain.value = 0.15;
+  osc.connect(gain).connect(dest);
+  const audio = new Audio();
+  audio.srcObject = dest.stream;
+  if (selectedSpeakerId && typeof audio.setSinkId === 'function') {
+    try { await audio.setSinkId(selectedSpeakerId); } catch {}
+  }
+  osc.start();
+  audio.play().catch(() => {});
+  setTimeout(() => {
+    osc.stop();
+    audio.srcObject = null;
+    ctx.close();
+  }, 600);
+}
+
+async function confirmPrejoin() {
+  if (!pendingJoin || prejoinBusy) return;
+  const { nick, roomId, invite } = pendingJoin;
+  pendingJoin = null;
+  await startSession(nick, roomId, invite);
+}
+
+function cancelPrejoin() {
+  pendingJoin = null;
+  stopPrejoinStream();
+  showScreen('lobby');
+}
+
+if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+  navigator.mediaDevices.addEventListener('devicechange', () => {
+    if (pendingJoin && !prejoinBusy) populateDeviceLists();
+  });
 }
 
 // ── Videos en pantalla ──────────────────────────────────────────
@@ -145,6 +352,9 @@ function addVideoTile(stream, nick, tileId, muted = false) {
 
   const video = tile.querySelector('video');
   video.srcObject = stream;
+  if (tileId !== 'tile-local' && selectedSpeakerId && typeof video.setSinkId === 'function') {
+    video.setSinkId(selectedSpeakerId).catch(() => {});
+  }
 
   if (!muted && stream.getVideoTracks().length === 0) {
     tile.classList.add('cam-off');
@@ -625,7 +835,11 @@ function connectSocket(roomId, nick, invite) {
   });
 
   socket.on('invite-invalid', () => {
-    toast('Este enlace de invitación ya no es válido o expiró');
+    if (joinedWithInvite) {
+      toast('El enlace de invitación expiró o ya no es válido. Pídele uno nuevo al host (duran 4 horas).', 6000);
+    } else {
+      toast('Esa sala necesita el enlace de invitación del host. Pídeselo (botón "Copiar enlace") y pégalo en el campo de código.', 7000);
+    }
     hangUp();
   });
 
@@ -726,23 +940,40 @@ async function createRoom() {
   if (!nick) { toast('Escribe tu nickname'); return; }
 
   const roomId = Math.random().toString(36).slice(2, 8).toUpperCase();
-  await startSession(nick, roomId, null); // sala nueva: no necesita token, se genera en el server
+  await openPrejoin(nick, roomId, null, true); // sala nueva: no necesita token, se genera en el server
+}
+
+// Acepta un código ("ABC123") o un enlace de invitación completo (o el texto de "Copiar enlace")
+function parseJoinInput(raw) {
+  const text = raw.trim();
+  const urlMatch = text.match(/https?:\/\/\S+/i);
+  if (urlMatch) {
+    try {
+      const u = new URL(urlMatch[0]);
+      const r = u.searchParams.get('room');
+      if (r) return { room: r.toUpperCase(), invite: u.searchParams.get('invite') };
+    } catch {}
+  }
+  const room = text.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+  // El token de invitación solo es válido si el código coincide con el del enlace abierto
+  const invite = (roomFromUrl && room === roomFromUrl.toUpperCase()) ? inviteFromUrl : null;
+  return { room, invite };
 }
 
 async function joinRoom() {
   const nick = document.getElementById('nick-input').value.trim();
   if (!nick) { toast('Escribe tu nickname'); return; }
-  const room = document.getElementById('join-input').value.trim().toUpperCase();
-  if (!room) { toast('Ingresa el código de sala'); return; }
-
-  // El token de invitación solo es válido si el código coincide con el del enlace abierto
-  const invite = (roomFromUrl && room === roomFromUrl.toUpperCase()) ? inviteFromUrl : null;
-  await startSession(nick, room, invite);
+  const raw = document.getElementById('join-input').value;
+  if (!raw.trim()) { toast('Ingresa el código o pega el enlace de invitación'); return; }
+  const { room, invite } = parseJoinInput(raw);
+  if (!room) { toast('No pude leer ese código o enlace'); return; }
+  await openPrejoin(nick, room, invite, false);
 }
 
 async function startSession(nick, roomId, invite) {
   myNick = nick;
   myRoomId = roomId;
+  joinedWithInvite = !!invite;
 
   await getMedia();
 
@@ -754,6 +985,9 @@ async function startSession(nick, roomId, invite) {
   container.innerHTML = '';
   addVideoTile(localStream, nick + ' (tú)', 'tile-local', true);
   if (!camOn) document.getElementById('tile-local').classList.add('cam-off');
+  // Reflejar en los botones lo que se eligió en la pre-entrada
+  document.getElementById('mic-btn').classList.toggle('off', !micOn);
+  document.getElementById('cam-btn').classList.toggle('off', !camOn);
 
   connectSocket(roomId, nick, invite);
 
